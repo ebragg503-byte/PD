@@ -1,24 +1,26 @@
 const express = require('express');
 const { Client, GatewayIntentBits } = require('discord.js');
+const path = require('path');
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.static('public'));
+
+// ربط مجلد public لتصفح الواجهة بشكل صحيح على Render
+app.use(express.static(path.join(__dirname, 'public')));
 
 // -------------------------------------------------------------
-// إعدادات الديسكورد - ضع التوكين الجديد هنا بعد عمل Reset Token
+// إعدادات الديسكورد
 // -------------------------------------------------------------
-const BOT_TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GKF9dZ.7T38swAqXXevDu5dt8WPlQ3kZ29b7NZBgB5ZH0';
+const BOT_TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.Gg3hl8.fbqn2Gvh2K6b-ucL6ByiP8Pxehl6sjfRzjsplU';
 const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
 const REPORTS_CHANNEL_ID = '1520998767325741148';
 
-// قاعدة البيانات المؤقتة في الذاكرة
 let cadetsData = [];
 
-// إنشاء العميل مع الصلاحيات المطلوبة
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -28,10 +30,8 @@ const client = new Client({
     ]
 });
 
-// عند تشغيل البوت: عمل سحب شامل لجميع الأعضاء الحاليين
 client.once('ready', async () => {
     console.log(`🤖 تم تشغيل البوت بنجاح باسم: ${client.user.tag}`);
-    
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const members = await guild.members.fetch();
@@ -46,7 +46,6 @@ client.once('ready', async () => {
     }
 });
 
-// دالة التحقق من رتب العضو وتحديثه باللوحة أو نقله للأرشيف
 function checkAndSyncMember(member) {
     const isCadet = member.roles.cache.has(CADET_ROLE_ID);
     const isSoloCadet = member.roles.cache.has(SOLO_CADET_ROLE_ID);
@@ -76,38 +75,33 @@ function checkAndSyncMember(member) {
     }
 }
 
-// التحديث التلقائي الفوري عند إضافة أو إزالة رتبة
 client.on('guildMemberUpdate', (oldMember, newMember) => {
     checkAndSyncMember(newMember);
 });
 
-// قراءة التقارير تلقائياً من ديسكورد
 client.on('messageCreate', message => {
     if (message.author.bot && message.channel.id !== REPORTS_CHANNEL_ID) return;
 
     const authorId = message.author.id;
     let cadet = cadetsData.find(c => c.discordId === authorId && c.status === 'active');
 
-    if (cadet) {
-        if (message.channel.id === REPORTS_CHANNEL_ID) {
-            cadet.reports.push({
-                id: message.id,
-                title: message.content.slice(0, 50) || 'تقرير جديد من MDT',
-                content: message.content || 'يحتوي على مرفقات/صور MDT',
-                date: new Date().toLocaleDateString('ar-SA')
-            });
-        }
+    if (cadet && message.channel.id === REPORTS_CHANNEL_ID) {
+        cadet.reports.push({
+            id: message.id,
+            title: message.content.slice(0, 50) || 'تقرير جديد من MDT',
+            content: message.content || 'يحتوي على مرفقات/صور MDT',
+            date: new Date().toLocaleDateString('ar-SA')
+        });
     }
 });
 
 // -------------------------------------------------------------
-// مسارات الـ API للوحة البيانات (Express Routes)
+// مسارات الـ API والصفحات
 // -------------------------------------------------------------
 app.get('/api/cadets', (req, res) => {
     res.json(cadetsData);
 });
 
-// مسار التعديل اليدوي للتقارير والساعات القديمة
 app.post('/api/update-cadet-manual', (req, res) => {
     const { discordId, hours, reportTitle, reportContent } = req.body;
     let cadet = cadetsData.find(c => c.discordId === discordId);
@@ -130,11 +124,15 @@ app.post('/api/update-cadet-manual', (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`🌐 لوحة البيانات تعمل على: http://localhost:${PORT}`);
+// توجيه أي طلب صفحة لـ index.html لضمان عدم ظهور Not Found
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// تسجيل دخول البوت
-if (BOT_TOKEN !== 'ضع_التوكين_الجديد_هنا') {
+app.listen(PORT, () => {
+    console.log(`🌐 لوحة البيانات تعمل على المنفذ: ${PORT}`);
+});
+
+if (BOT_TOKEN && BOT_TOKEN !== 'ضع_التوكين_الجديد_هنا') {
     client.login(BOT_TOKEN);
 }
