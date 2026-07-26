@@ -7,20 +7,20 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// ربط مجلد public لتصفح الواجهة بشكل صحيح على Render
+// ربط مجلد public لتصفح الواجهة
 app.use(express.static(path.join(__dirname, 'public')));
 
 // -------------------------------------------------------------
 // إعدادات الديسكورد والرومات
 // -------------------------------------------------------------
-const BOT_TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GMOds5.X_mHgZZPDmNQa1tZPvydg7RGXIneDOPPLXycdE';
+const BOT_TOKEN = process.env.BOT_TOKEN; // ← مهم جداً
 const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
 // الرومات الخاصة بالتقارير والساعات
 const REPORTS_CHANNEL_ID = '1520998767325741148';
-const HOURS_CHANNEL_ID = '1530564311217471639'; // روم احتساب الساعات
+const HOURS_CHANNEL_ID = '1530564311217471639';
 
 let cadetsData = [];
 
@@ -85,13 +85,8 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
 // استخراج أرقام الساعات من الرسالة
 function parseHours(text) {
     if (!text) return 0;
-    
-    // البحث عن أول رقم (سواء صحيح أو بفاصلة مثل 2.5)
     const match = text.match(/(\d+(?:\.\d+)?)/);
-    if (match && match[1]) {
-        return parseFloat(match[1]);
-    }
-    return 0;
+    return match ? parseFloat(match[1]) : 0;
 }
 
 client.on('messageCreate', message => {
@@ -102,7 +97,6 @@ client.on('messageCreate', message => {
 
     if (!cadet) return;
 
-    // 1. استقبال الساعات من روم الساعات المخصص
     if (message.channel.id === HOURS_CHANNEL_ID) {
         const hoursToAdd = parseHours(message.content);
         if (hoursToAdd > 0) {
@@ -111,7 +105,6 @@ client.on('messageCreate', message => {
         }
     }
 
-    // 2. استقبال التقارير من روم التقارير المخصص
     if (message.channel.id === REPORTS_CHANNEL_ID) {
         cadet.reports.push({
             id: message.id,
@@ -123,7 +116,7 @@ client.on('messageCreate', message => {
 });
 
 // -------------------------------------------------------------
-// مسارات الـ API والصفحات
+// API
 // -------------------------------------------------------------
 app.get('/api/cadets', (req, res) => {
     res.json(cadetsData);
@@ -152,12 +145,12 @@ app.post('/api/update-cadet-manual', (req, res) => {
 });
 
 app.get(/(.*)/, (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));});
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.listen(PORT, () => {
     console.log(`🌐 لوحة البيانات تعمل على المنفذ: ${PORT}`);
 });
 
-if (BOT_TOKEN && BOT_TOKEN !== 'ضع_التوكين_الجديد_هنا') {
-    client.login(BOT_TOKEN);
-}
+// تسجيل الدخول
+client.login(BOT_TOKEN);
