@@ -11,13 +11,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // -------------------------------------------------------------
-// إعدادات الديسكورد
+// إعدادات الديسكورد والرومات
 // -------------------------------------------------------------
-const BOT_TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.Gg3hl8.fbqn2Gvh2K6b-ucL6ByiP8Pxehl6sjfRzjsplU';
+const BOT_TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GMOds5.X_mHgZZPDmNQa1tZPvydg7RGXIneDOPPLXycdE';
 const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
+
+// الرومات الخاصة بالتقارير والساعات
 const REPORTS_CHANNEL_ID = '1520998767325741148';
+const HOURS_CHANNEL_ID = '1530564311217471639'; // روم احتساب الساعات
 
 let cadetsData = [];
 
@@ -53,7 +56,7 @@ function checkAndSyncMember(member) {
     let existing = cadetsData.find(c => c.discordId === member.id);
 
     if (isCadet || isSoloCadet) {
-        const rankName = isSoloCadet ? 'Solo Cadet' : 'Cadet';
+        const rankName = isSoloCadet ? 'سولو كاديت (Solo Cadet)' : 'كاديت (Cadet)';
         const displayName = member.displayName || member.user.username;
 
         if (existing) {
@@ -79,17 +82,41 @@ client.on('guildMemberUpdate', (oldMember, newMember) => {
     checkAndSyncMember(newMember);
 });
 
+// استخراج أرقام الساعات من الرسالة
+function parseHours(text) {
+    if (!text) return 0;
+    
+    // البحث عن أول رقم (سواء صحيح أو بفاصلة مثل 2.5)
+    const match = text.match(/(\d+(?:\.\d+)?)/);
+    if (match && match[1]) {
+        return parseFloat(match[1]);
+    }
+    return 0;
+}
+
 client.on('messageCreate', message => {
-    if (message.author.bot && message.channel.id !== REPORTS_CHANNEL_ID) return;
+    if (message.author.bot) return;
 
     const authorId = message.author.id;
     let cadet = cadetsData.find(c => c.discordId === authorId && c.status === 'active');
 
-    if (cadet && message.channel.id === REPORTS_CHANNEL_ID) {
+    if (!cadet) return;
+
+    // 1. استقبال الساعات من روم الساعات المخصص
+    if (message.channel.id === HOURS_CHANNEL_ID) {
+        const hoursToAdd = parseHours(message.content);
+        if (hoursToAdd > 0) {
+            cadet.hours += hoursToAdd;
+            console.log(`⏱️ تم إضافة ${hoursToAdd} ساعة للعسكري: ${cadet.name}`);
+        }
+    }
+
+    // 2. استقبال التقارير من روم التقارير المخصص
+    if (message.channel.id === REPORTS_CHANNEL_ID) {
         cadet.reports.push({
             id: message.id,
             title: message.content.slice(0, 50) || 'تقرير جديد من MDT',
-            content: message.content || 'يحتوي على مرفقات/صور MDT',
+            content: message.content || 'يحتوي على مرفقات أو صور',
             date: new Date().toLocaleDateString('ar-SA')
         });
     }
@@ -113,7 +140,7 @@ app.post('/api/update-cadet-manual', (req, res) => {
         if (reportTitle || reportContent) {
             cadet.reports.push({
                 id: Date.now().toString(),
-                title: reportTitle || 'تقرير سابق مضاف يدوياً',
+                title: reportTitle || 'تقرير مضاف يدوياً',
                 content: reportContent || 'بدون تفاصيل إضافية',
                 date: new Date().toLocaleDateString('ar-SA')
             });
@@ -124,10 +151,8 @@ app.post('/api/update-cadet-manual', (req, res) => {
     }
 });
 
-// توجيه أي طلب صفحة لـ index.html لضمان عدم ظهور Not Found
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.get(/(.*)/, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));});
 
 app.listen(PORT, () => {
     console.log(`🌐 لوحة البيانات تعمل على المنفذ: ${PORT}`);
