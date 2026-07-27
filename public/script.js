@@ -75,7 +75,7 @@ function renderTable() {
                 <td><span class="badge-rank ${rankClass}"><i class="fa-solid ${rankIcon}"></i> ${item.rank}</span></td>
                 <td><span class="hours-tag">${formattedHours}</span></td>
                 <td><i class="fa-solid fa-file-alt" style="color:var(--text-secondary); margin-left: 5px;"></i> ${item.reports ? item.reports.length : 0}</td>
-                <td>
+                <td style="text-align:center;">
                     <div class="actions" style="justify-content: center;">
                         <button class="btn-action btn-view" onclick="showReports('${item.discordId}')">
                             <i class="fa-solid fa-eye"></i> Reports
