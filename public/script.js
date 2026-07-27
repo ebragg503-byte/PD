@@ -1,125 +1,300 @@
-// =========================
-// Socket.io (تحديث مباشر)
-// =========================
 const socket = io();
 
-// كل ما يرسل السيرفر تحديث جديد
-socket.on("cadetsUpdate", (data) => {
-    allData = data;
+let currentUser = null;
+let cadetsData = [];
+let usersData = [];
+let logsData = [];
+let availableWings = [];
+
+// كشف خمول المستخدم للتنقل بين active و sleep
+let lastActivity = Date.now();
+let userStatus = 'active';
+
+document.addEventListener('mousemove', resetInactivity);
+document.addEventListener('keypress', resetInactivity);
+
+function resetInactivity() {
+    lastActivity = Date.now();
+    if (userStatus === 'sleep') {
+        userStatus = 'active';
+        sendStatusUpdate();
+    }
+}
+
+setInterval(() => {
+    if (currentUser && currentUser.approved) {
+        if (Date.now() - lastActivity > 60000 && userStatus !== 'sleep') { // دقيقة خمول = sleep
+            userStatus = 'sleep';
+            sendStatusUpdate();
+        } else {
+            sendStatusUpdate();
+        }
+    }
+}, 10000);
+
+function sendStatusUpdate() {
+    if (!currentUser) return;
+    fetch('/api/user-heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ copyId: currentUser.copyId, status: userStatus })
+    });
+}
+
+// استقبال التحديثات المباشرة Socket.io
+socket.on('cadetsUpdate', (data) => {
+    cadetsData = data;
+    renderCadets();
     updateStats();
-    renderTable();
 });
 
-// =========================
-// المتغيرات الأساسية
-// =========================
-let allData = [];
-let currentTab = 'active';
+socket.on('usersUpdate', (data) => {
+    usersData = data;
+    renderUsers();
+    renderApproval();
 
-// =========================
-// جلب البيانات أول مرة فقط
-// =========================
-async function fetchCadets() {
-    try {
-        const res = await fetch('/api/cadets');
-        allData = await res.json();
-        updateStats();
-        renderTable();
-    } catch (e) {
-        console.error(e);
+    if (currentUser) {
+        const updated = usersData.find(u => u.copyId === currentUser.copyId);
+        if (updated) {
+            currentUser = updated;
+            if (currentUser.approved) {
+                document.getElementById('loginModal').style.display = 'none';
+            } else {
+                document.getElementById('loginModal').style.display = 'flex';
+                document.getElementById('loginStatus').innerHTML = `<span style="color:var(--accent-amber)">حسابك بانتظار موافقة المسؤول...</span>`;
+            }
+        }
+    }
+});
+
+socket.on('logsUpdate', (data) => {
+    logsData = data;
+    renderLogs();
+});
+
+// جلب قوائم الأساسية عند التشغيل
+async function init() {
+    const resWings = await fetch('/api/wings-list');
+    availableWings = await resWings.json();
+
+    const resCadets = await fetch('/api/cadets');
+    cadetsData = await resCadets.json();
+
+    const resUsers = await fetch('/api/users');
+    usersData = await resUsers.json();
+
+    const resLogs = await fetch('/api/logs');
+    logsData = await resLogs.json();
+
+    renderCadets();
+    renderUsers();
+    renderApproval();
+    renderLogs();
+    updateStats();
+
+    // التحقق من الجلسة المخزنة محلياً
+    const savedUser = localStorage.getItem('academy_user');
+    if (savedUser) {
+        currentUser = JSON.parse(savedUser);
+        document.getElementById('loginUsername').value = currentUser.username;
+        document.getElementById('loginCopyId').value = currentUser.copyId;
+        checkLogin(currentUser.username, currentUser.copyId);
     }
 }
 
-// =========================
-// تحديث الإحصائيات
-// =========================
-function updateStats() {
-    const activeOnly = allData.filter(i => i.status === 'active');
-    document.getElementById('statTotal').innerText = activeOnly.length;
+// نموذج تسجيل الدخول
+document.getElementById('loginForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const username = document.getElementById('loginUsername').value;
+    const copyId = document.getElementById('loginCopyId').value;
+    checkLogin(username, copyId);
+});
 
-    const totalH = activeOnly.reduce((acc, curr) => acc + (curr.hours || 0), 0);
-    document.getElementById('statHours').innerText = totalH.toFixed(2).replace('.', ',');
+async function checkLogin(username, copyId) {
+    const res = await fetch('/api/login-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, copyId })
+    });
+    const data = await res.json();
 
-    const totalR = activeOnly.reduce((acc, curr) => acc + (curr.reports ? curr.reports.length : 0), 0);
-    document.getElementById('statReports').innerText = totalR;
+    currentUser = { username, copyId, approved: data.approved };
+    localStorage.setItem('academy_user', JSON.stringify(currentUser));
+
+    document.getElementById('displayLoggedUser').innerText = username;
+    document.getElementById('displayLoggedStatus').innerText = `ID: ${copyId}`;
+
+    if (data.approved) {
+        document.getElementById('loginModal').style.display = 'none';
+        sendStatusUpdate();
+    } else {
+        document.getElementById('loginModal').style.display = 'flex';
+        document.getElementById('loginStatus').innerHTML = `<span style="color:var(--accent-amber)">تم إرسال الطلب، بانتظار موافقة المسؤول...</span>`;
+    }
 }
 
-// =========================
-// عرض الجدول
-// =========================
-function renderTable() {
-    const tbody = document.getElementById('tableBody');
+// تحديث الإحصائيات
+function updateStats() {
+    document.getElementById('statTotal').innerText = cadetsData.length;
+    const hours = cadetsData.reduce((acc, c) => acc + (c.hours || 0), 0);
+    document.getElementById('statHours').innerText = hours.toFixed(1);
+    const points = cadetsData.reduce((acc, c) => acc + (c.points || 0), 0);
+    document.getElementById('statPoints').innerText = points;
+}
+
+// عرض العسكريين
+function renderCadets() {
+    const tbody = document.getElementById('cadetsTableBody');
     tbody.innerHTML = '';
 
-    const filtered = allData.filter(item => item.status === currentTab);
-
-    if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding: 40px;">No data available in this section</td></tr>`;
-        return;
-    }
-
-    filtered.forEach(item => {
-        const rankClass = item.rank === 'Solo Cadet' ? 'solo-cadet' : 'cadet';
-        const rankIcon = item.rank === 'Solo Cadet' ? 'fa-star' : 'fa-graduation-cap';
-
-        const formattedHours = (item.hours || 0).toFixed(2).replace('.', ',');
-
+    cadetsData.forEach(c => {
+        const wingCount = c.wings ? c.wings.length : 0;
         tbody.innerHTML += `
             <tr>
+                <td><b>${c.name}</b></td>
+                <td><span style="color:var(--accent-blue);">${c.rank}</span></td>
+                <td><span style="color:var(--accent-green); font-weight:bold;">${c.hours || 0} س</span></td>
+                <td><span style="color:var(--accent-amber); font-weight:bold;">${c.points || 0} ن</span></td>
                 <td>
-                    <div class="officer-name">
-                        <i class="fa-solid fa-user-circle" style="font-size: 20px; color: var(--text-secondary);"></i>
-                        ${item.name}
-                    </div>
+                    <button class="badge-wings" onclick="openWingsDetails('${c.discordId}')">
+                        <i class="fa-solid fa-award"></i> ${wingCount} وينق
+                    </button>
                 </td>
-                <td><span class="badge-rank ${rankClass}"><i class="fa-solid ${rankIcon}"></i> ${item.rank}</span></td>
-                <td><span class="hours-tag">${formattedHours}</span></td>
-                <td><i class="fa-solid fa-file-alt" style="color:var(--text-secondary); margin-left: 5px;"></i> ${item.reports ? item.reports.length : 0}</td>
+                <td>
+                    <button class="btn" style="background:rgba(255,255,255,0.1); color:#fff;" onclick="openReportsDetails('${c.discordId}')">
+                        <i class="fa-solid fa-file-lines"></i> ${c.reports ? c.reports.length : 0}
+                    </button>
+                </td>
                 <td style="text-align:center;">
-                    <div class="actions" style="justify-content: center;">
-                        <button class="btn-action btn-view" onclick="showReports('${item.discordId}')">
-                            <i class="fa-solid fa-eye"></i> Reports
-                        </button>
-                        <button class="btn-action btn-edit" onclick="openEditModal('${item.discordId}')">
-                            <i class="fa-solid fa-pen"></i> Edit / Add
-                        </button>
-                    </div>
+                    <button class="btn btn-primary" onclick="openEditModal('${c.discordId}')">
+                        <i class="fa-solid fa-pen"></i> تعديل
+                    </button>
                 </td>
             </tr>
         `;
     });
 }
 
-// =========================
-// التبديل بين التابات
-// =========================
-function switchTab(tab, btn) {
-    currentTab = tab;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    renderTable();
+// عرض متواجدين الموقع
+function renderUsers() {
+    const tbody = document.getElementById('usersTableBody');
+    tbody.innerHTML = '';
+
+    usersData.forEach(u => {
+        let badge = '';
+        if (u.status === 'active') {
+            badge = `<span class="badge-status" style="background:rgba(16,185,129,0.2); color:var(--accent-green);"><span class="status-dot status-active"></span> Active</span>`;
+        } else if (u.status === 'sleep') {
+            badge = `<span class="badge-status" style="background:rgba(245,158,11,0.2); color:var(--accent-amber);"><span class="status-dot status-sleep"></span> Sleep</span>`;
+        } else {
+            badge = `<span class="badge-status" style="background:rgba(239,68,68,0.2); color:var(--accent-red);"><span class="status-dot status-no-active"></span> No Active</span>`;
+        }
+
+        tbody.innerHTML += `
+            <tr>
+                <td><b>${u.username}</b></td>
+                <td>${u.copyId}</td>
+                <td>${badge}</td>
+                <td>${u.approved ? '<span style="color:var(--accent-green)">مقبول</span>' : '<span style="color:var(--accent-red)">معلق</span>'}</td>
+            </tr>
+        `;
+    });
 }
 
-// =========================
-// عرض التقارير
-// =========================
-function showReports(discordId) {
-    const officer = allData.find(c => c.discordId === discordId);
-    if (!officer) return;
+// عرض طلبات الموافقة
+function renderApproval() {
+    const tbody = document.getElementById('approvalTableBody');
+    tbody.innerHTML = '';
 
-    document.getElementById('modalOfficerName').innerText = `Officer Reports: ${officer.name}`;
-    const reportsList = document.getElementById('modalReportsList');
-    reportsList.innerHTML = '';
+    const pending = usersData.filter(u => !u.approved);
+    if (pending.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-secondary);">لا توجد طلبات معلقة حالياً</td></tr>`;
+        return;
+    }
 
-    if (!officer.reports || officer.reports.length === 0) {
-        reportsList.innerHTML = '<p style="color:var(--text-secondary); text-align:center; padding: 20px;">No reports available for this officer.</p>';
+    pending.forEach(u => {
+        tbody.innerHTML += `
+            <tr>
+                <td><b>${u.username}</b></td>
+                <td>${u.copyId}</td>
+                <td style="text-align:center;">
+                    <button class="btn btn-success" onclick="approveUser('${u.copyId}', true)">قبول</button>
+                    <button class="btn btn-danger" onclick="approveUser('${u.copyId}', false)">رفض</button>
+                </td>
+            </tr>
+        `;
+    });
+}
+
+async function approveUser(copyId, approve) {
+    await fetch('/api/approve-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ copyId, approve, adminName: currentUser ? currentUser.username : 'Admin' })
+    });
+}
+
+// عرض اللوقات
+function renderLogs() {
+    const tbody = document.getElementById('logsTableBody');
+    tbody.innerHTML = '';
+
+    logsData.forEach(l => {
+        tbody.innerHTML += `
+            <tr>
+                <td><b style="color:var(--accent-blue);">${l.by}</b></td>
+                <td>${l.action}</td>
+                <td><b>${l.target}</b></td>
+                <td style="color:var(--text-secondary); font-size:12px;">${l.time}</td>
+            </tr>
+        `;
+    });
+}
+
+// فتح نافذة التفاصيل الخاصة بالوينقات
+function openWingsDetails(discordId) {
+    const cadet = cadetsData.find(c => c.discordId === discordId);
+    if (!cadet) return;
+
+    document.getElementById('wingsModalTitle').innerText = `وينقات العسكري: ${cadet.name}`;
+    const container = document.getElementById('wingsListDetails');
+    container.innerHTML = '';
+
+    if (!cadet.wings || cadet.wings.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">لا يملك أي وينقات حالياً</p>';
     } else {
-        officer.reports.forEach(rep => {
-            reportsList.innerHTML += `
-                <div style="background:rgba(15, 23, 42, 0.8); padding:12px 15px; border-radius:10px; margin-bottom:10px; border:1px solid var(--card-border);">
-                    <div style="font-size:11px; color:var(--accent-blue); font-weight:700;">${rep.date}</div>
-                    <div style="font-weight:700; margin-top:4px; font-size:14px;">${rep.title}</div>
-                    <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">${rep.content}</div>
+        cadet.wings.forEach(wId => {
+            const wInfo = availableWings.find(w => w.id === wId) || { name: wId, icon: 'fa-shield' };
+            container.innerHTML += `
+                <div style="background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px; display:flex; align-items:center; gap:10px;">
+                    <i class="fa-solid ${wInfo.icon}" style="color:var(--accent-indigo); font-size:18px;"></i>
+                    <span style="font-weight:bold;">${wInfo.name}</span>
+                </div>
+            `;
+        });
+    }
+
+    document.getElementById('wingsModal').style.display = 'flex';
+}
+
+// فتح تفاصيل التقارير
+function openReportsDetails(discordId) {
+    const cadet = cadetsData.find(c => c.discordId === discordId);
+    if (!cadet) return;
+
+    document.getElementById('reportsModalTitle').innerText = `تقارير العسكري: ${cadet.name}`;
+    const container = document.getElementById('reportsListDetails');
+    container.innerHTML = '';
+
+    if (!cadet.reports || cadet.reports.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">لا توجد تقارير مسجلة</p>';
+    } else {
+        cadet.reports.forEach(r => {
+            container.innerHTML += `
+                <div style="background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border-right:3px solid var(--accent-blue);">
+                    <div style="font-size:11px; color:var(--text-secondary);">${r.date}</div>
+                    <div style="font-weight:bold; font-size:13px;">${r.title}</div>
+                    <div style="font-size:12px; color:var(--text-secondary);">${r.content}</div>
                 </div>
             `;
         });
@@ -128,52 +303,76 @@ function showReports(discordId) {
     document.getElementById('reportsModal').style.display = 'flex';
 }
 
-// =========================
-// فتح نافذة التعديل
-// =========================
+// فتح modal التعديل
 function openEditModal(discordId) {
-    const officer = allData.find(c => c.discordId === discordId);
-    if (!officer) return;
+    const cadet = cadetsData.find(c => c.discordId === discordId);
+    if (!cadet) return;
 
-    document.getElementById('editDiscordId').value = officer.discordId;
-    document.getElementById('editOfficerName').innerText = `Edit Data: ${officer.name}`;
-    document.getElementById('manualHours').value = officer.hours || 0;
-    document.getElementById('manualReportTitle').value = '';
-    document.getElementById('manualReportContent').value = '';
+    document.getElementById('editDiscordId').value = cadet.discordId;
+    document.getElementById('editModalTitle').innerText = `تعديل: ${cadet.name}`;
+    document.getElementById('editHours').value = cadet.hours || 0;
+    document.getElementById('editPoints').value = cadet.points || 0;
+    document.getElementById('editReportTitle').value = '';
+    document.getElementById('editReportContent').value = '';
+
+    // بناء خيارات الوينقات
+    const wingsContainer = document.getElementById('wingsContainer');
+    wingsContainer.innerHTML = '';
+
+    availableWings.forEach(w => {
+        const isChecked = cadet.wings && cadet.wings.includes(w.id) ? 'checked' : '';
+        wingsContainer.innerHTML += `
+            <label>
+                <input type="checkbox" name="wings" value="${w.id}" ${isChecked}>
+                <i class="fa-solid ${w.icon}"></i> ${w.name}
+            </label>
+        `;
+    });
 
     document.getElementById('editModal').style.display = 'flex';
 }
+
+// حفظ التعديلات
+document.getElementById('editForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const discordId = document.getElementById('editDiscordId').value;
+    const hours = document.getElementById('editHours').value;
+    const points = document.getElementById('editPoints').value;
+    const reportTitle = document.getElementById('editReportTitle').value;
+    const reportContent = document.getElementById('editReportContent').value;
+
+    const selectedWings = Array.from(document.querySelectorAll('input[name="wings"]:checked')).map(cb => cb.value);
+
+    await fetch('/api/update-cadet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            discordId,
+            hours,
+            points,
+            wings: selectedWings,
+            reportTitle,
+            reportContent,
+            editedBy: currentUser ? currentUser.username : 'Admin'
+        })
+    });
+
+    closeModal('editModal');
+});
 
 function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
-// =========================
-// حفظ التعديلات اليدوية
-// =========================
-document.getElementById('manualEditForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const discordId = document.getElementById('editDiscordId').value;
-    const hours = document.getElementById('manualHours').value;
-    const reportTitle = document.getElementById('manualReportTitle').value;
-    const reportContent = document.getElementById('manualReportContent').value;
+function switchView(viewName, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
 
-    try {
-        const res = await fetch('/api/update-cadet-manual', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ discordId, hours, reportTitle, reportContent })
-        });
-        const data = await res.json();
-        if (data.success) {
-            closeModal('editModal');
-        }
-    } catch (err) {
-        console.error(err);
-    }
-});
+    document.getElementById('viewCadets').style.display = viewName === 'cadets' ? 'block' : 'none';
+    document.getElementById('viewUsers').style.display = viewName === 'users' ? 'block' : 'none';
+    document.getElementById('viewApproval').style.display = viewName === 'approval' ? 'block' : 'none';
+    document.getElementById('viewLogs').style.display = viewName === 'logs' ? 'block' : 'none';
+}
 
-// =========================
-// تشغيل أولي
-// =========================
-fetchCadets();
+init();
