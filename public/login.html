@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cadet Tracker | Login</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+body {
+    background:#0b0f19;
+    color:white;
+    font-family:'Tajawal',sans-serif;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+}
+.login-box {
+    background:#131b2e;
+    padding:30px;
+    border-radius:15px;
+    width:350px;
+    text-align:center;
+    border:1px solid rgba(255,255,255,0.1);
+}
+input {
+    width:100%;
+    padding:12px;
+    margin-top:10px;
+    border-radius:10px;
+    border:none;
+    background:#0f172a;
+    color:white;
+}
+button {
+    width:100%;
+    padding:12px;
+    margin-top:15px;
+    background:#38bdf8;
+    border:none;
+    border-radius:10px;
+    font-weight:700;
+    cursor:pointer;
+}
+</style>
+</head>
+<body>
+
+<div class="login-box">
+    <h2><i class="fa-brands fa-discord"></i> Discord Login</h2>
+    <input id="username" placeholder="Discord Username">
+    <input id="discordId" placeholder="Discord ID">
+    <button onclick="requestAccess()">Request Access</button>
+</div>
+
+<script>
+async function requestAccess() {
+    const username = document.getElementById('username').value;
+    const discordId = document.getElementById('discordId').value;
+
+    const res = await fetch('/api/request-access', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ username, discordId })
+    });
+
+    const data = await res.json();
+
+    if (data.exists) {
+        window.location.href = "/dashboard";
+    } else {
+        alert("Your request has been sent. Wait for approval.");
+    }
+}
+</script>
+
+</body>
+</html>

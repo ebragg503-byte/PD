@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Activity Logs</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+body { background:#0b0f19; color:white; font-family:'Tajawal'; padding:30px; }
+.log {
+    background:#131b2e;
+    padding:15px;
+    border-radius:10px;
+    margin-bottom:10px;
+    border:1px solid rgba(255,255,255,0.1);
+}
+</style>
+</head>
+<body>
+
+<h1>Activity Logs</h1>
+<div id="logs"></div>
+
+<script>
+async function loadLogs() {
+    const res = await fetch('/api/logs');
+    const logs = await res.json();
+
+    const container = document.getElementById('logs');
+    container.innerHTML = '';
+
+    logs.forEach(l => {
+        container.innerHTML += `
+            <div class="log">
+                <strong>${l.by}</strong> → ${l.action}<br>
+                Target: ${l.target}<br>
+                <small>${l.date}</small>
+            </div>
+        `;
+    });
+}
+
+loadLogs();
+setInterval(loadLogs, 3000);
+</script>
+
+</body>
+</html>

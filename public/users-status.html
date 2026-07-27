@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>User Status</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+body { background:#0b0f19; color:white; font-family:'Tajawal'; padding:30px; }
+.status {
+    padding:8px 12px;
+    border-radius:8px;
+    font-weight:700;
+}
+.active { background:#10b981; }
+.sleep { background:#f59e0b; }
+.not-active { background:#ef4444; }
+.card {
+    background:#131b2e;
+    padding:20px;
+    border-radius:12px;
+    margin-bottom:15px;
+    border:1px solid rgba(255,255,255,0.1);
+}
+</style>
+</head>
+<body>
+
+<h1>User Status</h1>
+<div id="users"></div>
+
+<script>
+async function loadUsers() {
+    const res = await fetch('/api/users');
+    const users = await res.json();
+
+    const container = document.getElementById('users');
+    container.innerHTML = '';
+
+    users.forEach(u => {
+        container.innerHTML += `
+            <div class="card">
+                <h3>${u.username}</h3>
+                <p>ID: ${u.discordId}</p>
+                <span class="status ${u.status}">${u.status.toUpperCase()}</span>
+            </div>
+        `;
+    });
+}
+
+loadUsers();
+setInterval(loadUsers, 3000);
+</script>
+
+</body>
+</html>

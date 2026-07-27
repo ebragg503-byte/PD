@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Points Manager</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+body { background:#0b0f19; color:white; font-family:'Tajawal'; padding:30px; }
+.card {
+    background:#131b2e;
+    padding:20px;
+    border-radius:12px;
+    margin-bottom:15px;
+    border:1px solid rgba(255,255,255,0.1);
+}
+input {
+    width:100%;
+    padding:10px;
+    border-radius:10px;
+    background:#0f172a;
+    color:white;
+    margin-top:10px;
+}
+button {
+    padding:10px;
+    width:100%;
+    border:none;
+    border-radius:10px;
+    background:#38bdf8;
+    margin-top:10px;
+    font-weight:700;
+}
+</style>
+</head>
+<body>
+
+<h1>Points Manager</h1>
+<div id="cadets"></div>
+
+<script>
+async function loadCadets() {
+    const res = await fetch('/api/cadets');
+    const cadets = await res.json();
+
+    const container = document.getElementById('cadets');
+    container.innerHTML = '';
+
+    cadets.forEach(c => {
+        container.innerHTML += `
+            <div class="card">
+                <h3>${c.name}</h3>
+                <p>Current Points: ${c.points}</p>
+                <input id="p_${c.discordId}" placeholder="New Points">
+                <button onclick="updatePoints('${c.discordId}')">Update</button>
+            </div>
+        `;
+    });
+}
+
+async function updatePoints(id) {
+    const points = document.getElementById(`p_${id}`).value;
+
+    await fetch('/api/update-points', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ discordId:id, points, by:"Admin" })
+    });
+
+    loadCadets();
+}
+
+loadCadets();
+</script>
+
+</body>
+</html>
