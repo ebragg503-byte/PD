@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // -------------------------------------------------------------
 // إعدادات الديسكورد والرومات
 // -------------------------------------------------------------
-const BOT_TOKEN = process.env.BOT_TOKEN; // ← مهم جداً
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
@@ -34,7 +34,7 @@ const client = new Client({
 });
 
 client.once('ready', async () => {
-    console.log(`🤖 تم تشغيل البوت بنجاح باسم: ${client.user.tag}`);
+    console.log(`🤖 Bot is running as: ${client.user.tag}`);
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const members = await guild.members.fetch();
@@ -43,9 +43,9 @@ client.once('ready', async () => {
             checkAndSyncMember(member);
         });
 
-        console.log(`✅ تم سحب بيانات الأعضاء والحالات الحالية بنجاح.`);
+        console.log(`✅ Synced all cadets successfully.`);
     } catch (err) {
-        console.error('❌ خطأ أثناء السحب الأول للأعضاء:', err);
+        console.error('❌ Error while syncing members:', err);
     }
 });
 
@@ -56,7 +56,7 @@ function checkAndSyncMember(member) {
     let existing = cadetsData.find(c => c.discordId === member.id);
 
     if (isCadet || isSoloCadet) {
-        const rankName = isSoloCadet ? 'سولو كاديت (Solo Cadet)' : 'كاديت (Cadet)';
+        const rankName = isSoloCadet ? 'Solo Cadet' : 'Cadet';
         const displayName = member.displayName || member.user.username;
 
         if (existing) {
@@ -101,16 +101,16 @@ client.on('messageCreate', message => {
         const hoursToAdd = parseHours(message.content);
         if (hoursToAdd > 0) {
             cadet.hours += hoursToAdd;
-            console.log(`⏱️ تم إضافة ${hoursToAdd} ساعة للعسكري: ${cadet.name}`);
+            console.log(`⏱️ Added ${hoursToAdd} hours to: ${cadet.name}`);
         }
     }
 
     if (message.channel.id === REPORTS_CHANNEL_ID) {
         cadet.reports.push({
             id: message.id,
-            title: message.content.slice(0, 50) || 'تقرير جديد من MDT',
-            content: message.content || 'يحتوي على مرفقات أو صور',
-            date: new Date().toLocaleDateString('ar-SA')
+            title: message.content.slice(0, 50) || 'New MDT Report',
+            content: message.content || 'Contains attachments or images',
+            date: new Date().toLocaleDateString('en-US')
         });
     }
 });
@@ -133,14 +133,14 @@ app.post('/api/update-cadet-manual', (req, res) => {
         if (reportTitle || reportContent) {
             cadet.reports.push({
                 id: Date.now().toString(),
-                title: reportTitle || 'تقرير مضاف يدوياً',
-                content: reportContent || 'بدون تفاصيل إضافية',
-                date: new Date().toLocaleDateString('ar-SA')
+                title: reportTitle || 'Manual Report',
+                content: reportContent || 'No additional details',
+                date: new Date().toLocaleDateString('en-US')
             });
         }
-        res.json({ success: true, message: 'تم تحديث البيانات بنجاح!' });
+        res.json({ success: true, message: 'Updated successfully!' });
     } else {
-        res.status(404).json({ success: false, message: 'العسكري غير موجود' });
+        res.status(404).json({ success: false, message: 'Cadet not found' });
     }
 });
 
@@ -149,7 +149,7 @@ app.get(/(.*)/, (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🌐 لوحة البيانات تعمل على المنفذ: ${PORT}`);
+    console.log(`🌐 Dashboard running on port: ${PORT}`);
 });
 
 // تسجيل الدخول
