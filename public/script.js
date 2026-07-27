@@ -6,7 +6,6 @@ let usersData = [];
 let logsData = [];
 let availableWings = [];
 
-// كشف خمول المستخدم للتنقل بين active و sleep
 let lastActivity = Date.now();
 let userStatus = 'active';
 
@@ -23,7 +22,7 @@ function resetInactivity() {
 
 setInterval(() => {
     if (currentUser && currentUser.approved) {
-        if (Date.now() - lastActivity > 60000 && userStatus !== 'sleep') { // دقيقة خمول = sleep
+        if (Date.now() - lastActivity > 60000 && userStatus !== 'sleep') {
             userStatus = 'sleep';
             sendStatusUpdate();
         } else {
@@ -41,7 +40,6 @@ function sendStatusUpdate() {
     });
 }
 
-// استقبال التحديثات المباشرة Socket.io
 socket.on('cadetsUpdate', (data) => {
     cadetsData = data;
     renderCadets();
@@ -72,37 +70,38 @@ socket.on('logsUpdate', (data) => {
     renderLogs();
 });
 
-// جلب قوائم الأساسية عند التشغيل
 async function init() {
-    const resWings = await fetch('/api/wings-list');
-    availableWings = await resWings.json();
+    try {
+        const resWings = await fetch('/api/wings-list');
+        availableWings = await resWings.json();
 
-    const resCadets = await fetch('/api/cadets');
-    cadetsData = await resCadets.json();
+        const resCadets = await fetch('/api/cadets');
+        cadetsData = await resCadets.json();
 
-    const resUsers = await fetch('/api/users');
-    usersData = await resUsers.json();
+        const resUsers = await fetch('/api/users');
+        usersData = await resUsers.json();
 
-    const resLogs = await fetch('/api/logs');
-    logsData = await resLogs.json();
+        const resLogs = await fetch('/api/logs');
+        logsData = await resLogs.json();
 
-    renderCadets();
-    renderUsers();
-    renderApproval();
-    renderLogs();
-    updateStats();
+        renderCadets();
+        renderUsers();
+        renderApproval();
+        renderLogs();
+        updateStats();
 
-    // التحقق من الجلسة المخزنة محلياً
-    const savedUser = localStorage.getItem('academy_user');
-    if (savedUser) {
-        currentUser = JSON.parse(savedUser);
-        document.getElementById('loginUsername').value = currentUser.username;
-        document.getElementById('loginCopyId').value = currentUser.copyId;
-        checkLogin(currentUser.username, currentUser.copyId);
+        const savedUser = localStorage.getItem('academy_user');
+        if (savedUser) {
+            currentUser = JSON.parse(savedUser);
+            document.getElementById('loginUsername').value = currentUser.username;
+            document.getElementById('loginCopyId').value = currentUser.copyId;
+            checkLogin(currentUser.username, currentUser.copyId);
+        }
+    } catch (e) {
+        console.error("Initialization error:", e);
     }
 }
 
-// نموذج تسجيل الدخول
 document.getElementById('loginForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const username = document.getElementById('loginUsername').value;
@@ -133,7 +132,6 @@ async function checkLogin(username, copyId) {
     }
 }
 
-// تحديث الإحصائيات
 function updateStats() {
     document.getElementById('statTotal').innerText = cadetsData.length;
     const hours = cadetsData.reduce((acc, c) => acc + (c.hours || 0), 0);
@@ -142,7 +140,6 @@ function updateStats() {
     document.getElementById('statPoints').innerText = points;
 }
 
-// عرض العسكريين
 function renderCadets() {
     const tbody = document.getElementById('cadetsTableBody');
     tbody.innerHTML = '';
@@ -175,7 +172,6 @@ function renderCadets() {
     });
 }
 
-// عرض متواجدين الموقع
 function renderUsers() {
     const tbody = document.getElementById('usersTableBody');
     tbody.innerHTML = '';
@@ -201,7 +197,6 @@ function renderUsers() {
     });
 }
 
-// عرض طلبات الموافقة
 function renderApproval() {
     const tbody = document.getElementById('approvalTableBody');
     tbody.innerHTML = '';
@@ -234,7 +229,6 @@ async function approveUser(copyId, approve) {
     });
 }
 
-// عرض اللوقات
 function renderLogs() {
     const tbody = document.getElementById('logsTableBody');
     tbody.innerHTML = '';
@@ -251,7 +245,6 @@ function renderLogs() {
     });
 }
 
-// فتح نافذة التفاصيل الخاصة بالوينقات
 function openWingsDetails(discordId) {
     const cadet = cadetsData.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -277,7 +270,6 @@ function openWingsDetails(discordId) {
     document.getElementById('wingsModal').style.display = 'flex';
 }
 
-// فتح تفاصيل التقارير
 function openReportsDetails(discordId) {
     const cadet = cadetsData.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -303,7 +295,6 @@ function openReportsDetails(discordId) {
     document.getElementById('reportsModal').style.display = 'flex';
 }
 
-// فتح modal التعديل
 function openEditModal(discordId) {
     const cadet = cadetsData.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -315,7 +306,6 @@ function openEditModal(discordId) {
     document.getElementById('editReportTitle').value = '';
     document.getElementById('editReportContent').value = '';
 
-    // بناء خيارات الوينقات
     const wingsContainer = document.getElementById('wingsContainer');
     wingsContainer.innerHTML = '';
 
@@ -332,7 +322,6 @@ function openEditModal(discordId) {
     document.getElementById('editModal').style.display = 'flex';
 }
 
-// حفظ التعديلات
 document.getElementById('editForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
