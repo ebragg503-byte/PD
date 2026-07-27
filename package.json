@@ -9,6 +9,7 @@
     "axios": "^1.18.1",
     "discord.js": "^14.27.0",
     "express": "^5.2.1",
-    "multer": "^2.2.0"
+    "multer": "^2.2.0",
+    "socket.io": "^4.7.2"
   }
 }
