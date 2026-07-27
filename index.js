@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// توجيه Express لقراءة الملفات الساكنة من مجلد public
+// Serve static files from the public folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -24,7 +24,7 @@ const SOLO_CADET_ROLE_ID = '1522994966597468191';
 const REPORTS_CHANNEL_ID = '1520998767325741148';
 const HOURS_CHANNEL_ID = '1530564311217471639';
 
-// قائمة معرّفات الديسكورد للمسؤولين (صاحب الحساب مقبول تلقائياً)
+// Admin Discord IDs (Auto-approved)
 const ADMIN_IDS = ['771747917040058388'];
 
 let cadetsData = [];
@@ -51,16 +51,16 @@ const client = new Client({
 function syncMember(member) {
     const isCadet = member.roles.cache.has(CADET_ROLE_ID);
     const isSolo = member.roles.cache.has(SOLO_CADET_ROLE_ID);
-    let cadet = cadetsData.find(c => c.discordId === member.id);
+    const index = cadetsData.findIndex(c => c.discordId === member.id);
 
     if (isCadet || isSolo) {
         const rank = isSolo ? 'Solo Cadet' : 'Cadet';
         const name = member.displayName || member.user.username;
 
-        if (cadet) {
-            cadet.name = name;
-            cadet.rank = rank;
-            cadet.status = 'active';
+        if (index !== -1) {
+            cadetsData[index].name = name;
+            cadetsData[index].rank = rank;
+            cadetsData[index].status = 'active';
         } else {
             cadetsData.push({
                 discordId: member.id,
@@ -73,8 +73,11 @@ function syncMember(member) {
                 status: 'active'
             });
         }
-    } else if (cadet) {
-        cadet.status = 'archived';
+    } else {
+        // حذف العسكري فوراً من القائمة إذا أزيلت منه الرتبة
+        if (index !== -1) {
+            cadetsData.splice(index, 1);
+        }
     }
 }
 
@@ -83,6 +86,7 @@ client.once('ready', async () => {
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const members = await guild.members.fetch();
+        cadetsData = []; // إعادة تهيئة البيانات
         members.forEach(m => syncMember(m));
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
@@ -108,9 +112,9 @@ client.on('messageCreate', msg => {
             logs.unshift({
                 id: Date.now(),
                 by: msg.author.username,
-                action: `إضافة ${added} ساعة تلقائياً`,
+                action: `Automatically added ${added} hours`,
                 target: cadet.name,
-                time: new Date().toLocaleString('ar-SA')
+                time: new Date().toLocaleString('en-US')
             });
             io.emit("cadetsUpdate", cadetsData);
             io.emit("logsUpdate", logs);
@@ -120,16 +124,16 @@ client.on('messageCreate', msg => {
     if (msg.channel.id === REPORTS_CHANNEL_ID) {
         cadet.reports.push({
             id: msg.id,
-            title: msg.content.slice(0, 40) || 'تقرير جديد',
+            title: msg.content.slice(0, 40) || 'New Report',
             content: msg.content,
-            date: new Date().toLocaleDateString()
+            date: new Date().toLocaleDateString('en-US')
         });
         logs.unshift({
             id: Date.now(),
             by: msg.author.username,
-            action: `إضافة تقرير MDT تلقائياً`,
+            action: `Automatically added MDT Report`,
             target: cadet.name,
-            time: new Date().toLocaleString('ar-SA')
+            time: new Date().toLocaleString('en-US')
         });
         io.emit("cadetsUpdate", cadetsData);
         io.emit("logsUpdate", logs);
@@ -143,33 +147,33 @@ app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy } = req.body;
     let cadet = cadetsData.find(c => c.discordId === discordId);
 
-    if (!cadet) return res.status(404).json({ success: false, message: 'العسكري غير موجود' });
+    if (!cadet) return res.status(404).json({ success: false, message: 'Cadet not found' });
 
     let changes = [];
 
     if (hours !== undefined && hours !== '') {
-        changes.push(`تعديل الساعات إلى (${hours})`);
+        changes.push(`Updated hours to (${hours})`);
         cadet.hours = parseFloat(hours);
     }
 
     if (points !== undefined && points !== '') {
-        changes.push(`تعديل النقاط إلى (${points})`);
+        changes.push(`Updated points to (${points})`);
         cadet.points = parseInt(points);
     }
 
     if (wings !== undefined) {
         cadet.wings = wings;
-        changes.push(`تحديث الوينقات`);
+        changes.push(`Updated wings`);
     }
 
     if (reportTitle || reportContent) {
         cadet.reports.push({
             id: Date.now().toString(),
-            title: reportTitle || 'تقرير يدوي',
+            title: reportTitle || 'Manual Report',
             content: reportContent || '-',
-            date: new Date().toLocaleDateString()
+            date: new Date().toLocaleDateString('en-US')
         });
-        changes.push(`إضافة تقرير يدوي`);
+        changes.push(`Added manual report`);
     }
 
     if (changes.length > 0) {
@@ -178,7 +182,7 @@ app.post('/api/update-cadet', (req, res) => {
             by: editedBy || 'Admin',
             action: changes.join(' | '),
             target: cadet.name,
-            time: new Date().toLocaleString('ar-SA')
+            time: new Date().toLocaleString('en-US')
         });
     }
 
@@ -189,18 +193,15 @@ app.post('/api/update-cadet', (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json(logs));
 
-// نظام التسجيل والقبول المحسّن
+// Login & Approval System
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = users.find(u => u.copyId === copyId);
 
     const isAdmin = ADMIN_IDS.includes(copyId);
 
-    // إذا كان المستخدم موجوداً مسابقاً
     if (user) {
-        // إذا كان مسؤولاً، نضمن تفعيل حسابه دائماً
         if (isAdmin) user.approved = true;
-        
         user.username = username || user.username;
         user.lastActive = Date.now();
         
@@ -212,11 +213,10 @@ app.post('/api/login-request', (req, res) => {
         });
     }
 
-    // إنشاء مستخدم جديد
     const newUser = {
         username,
         copyId,
-        approved: isAdmin, // يتفعل تلقائياً إذا كان أدمن، وإلا ينتظر الموافقة
+        approved: isAdmin,
         status: 'active',
         lastActive: Date.now()
     };
@@ -225,9 +225,9 @@ app.post('/api/login-request', (req, res) => {
     logs.unshift({
         id: Date.now(),
         by: username,
-        action: isAdmin ? 'تسجيل دخول مسئول (تلقائي)' : 'طلب دخول جديد للموقع',
-        target: 'النظام',
-        time: new Date().toLocaleString('ar-SA')
+        action: isAdmin ? 'Admin Auto Logged In' : 'New Login Request',
+        target: 'System',
+        time: new Date().toLocaleString('en-US')
     });
 
     io.emit("usersUpdate", users);
@@ -250,9 +250,9 @@ app.post('/api/approve-user', (req, res) => {
         logs.unshift({
             id: Date.now(),
             by: adminName || 'Admin',
-            action: approve ? 'قبول دخول المستخدم (دائم)' : 'رفض/إلغاء دخول المستخدم',
+            action: approve ? 'User Access Approved' : 'User Access Revoked',
             target: user.username,
-            time: new Date().toLocaleString('ar-SA')
+            time: new Date().toLocaleString('en-US')
         });
         io.emit("usersUpdate", users);
         io.emit("logsUpdate", logs);
@@ -288,7 +288,7 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-// مسار الصفحة الرئيسية يقرأ من مجلد public
+// Root route
 app.get('/', (req, res) => {
     const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
