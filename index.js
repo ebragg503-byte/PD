@@ -15,7 +15,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const GUILD_ID = '1517858234378227834';[cite: 3]
+const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';[cite: 3]
 const SOLO_CADET_ROLE_ID = '1522994966597468191';[cite: 3]
 
