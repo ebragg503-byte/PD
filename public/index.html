@@ -1,14 +1,13 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام متابعة الأكاديمية | Cadet Tracker</title>
-    <!-- خط Tajawal لتنسيق عربي احترافي -->
+    <title>Cadet Tracker | Academy System</title>
+
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <!-- مكتبة أيقونات FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
     <style>
         :root {
             --bg-main: #0b0f19;
@@ -45,7 +44,7 @@
             margin: 0 auto;
         }
 
-        /* الهيدر العلوي */
+        /* Navbar */
         .navbar {
             display: flex;
             justify-content: space-between;
@@ -85,7 +84,7 @@
             color: var(--text-secondary);
         }
 
-        /* الإحصائيات السريعة */
+        /* Stats */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -117,7 +116,7 @@
         .stat-info h3 { font-size: 22px; font-weight: 700; }
         .stat-info p { font-size: 13px; color: var(--text-secondary); }
 
-        /* الأزرار والتنقّل */
+        /* Tabs */
         .controls {
             display: flex;
             justify-content: space-between;
@@ -155,7 +154,7 @@
             box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);
         }
 
-        /* الجدول الرئيسي */
+        /* Table */
         .table-card {
             background: var(--card-bg);
             backdrop-filter: blur(12px);
@@ -168,7 +167,7 @@
         table {
             width: 100%;
             border-collapse: collapse;
-            text-align: right;
+            text-align: left;
         }
 
         th {
@@ -209,6 +208,7 @@
             align-items: center;
             gap: 6px;
         }
+
         .cadet { background: rgba(56, 189, 248, 0.15); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.3); }
         .solo-cadet { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
 
@@ -245,7 +245,7 @@
         .btn-edit { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
         .btn-edit:hover { background: var(--accent-amber); color: #000; }
 
-        /* النوافذ المنبثقة Modal */
+        /* Modal */
         .modal-overlay {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -283,6 +283,7 @@
         }
 
         .modal-header h3 { font-size: 18px; font-weight: 700; }
+
         .close-btn {
             background: rgba(255, 255, 255, 0.1);
             border: none;
@@ -323,22 +324,23 @@
         .btn-submit:hover { opacity: 0.9; }
     </style>
 </head>
+
 <body>
 
     <div class="container">
         
-        <!-- الهيدر -->
+        <!-- Navbar -->
         <div class="navbar">
             <div class="brand">
                 <i class="fa-solid fa-shield-halved"></i>
                 <div>
-                    <h1>لوحة متابعة الأكاديمية</h1>
-                    <p>نظام التتبع المباشر لضباط Cadet و Solo Cadet</p>
+                    <h1>Academy Dashboard</h1>
+                    <p>Live tracking system for Cadet & Solo Cadet officers</p>
                 </div>
             </div>
         </div>
 
-        <!-- الإحصائيات -->
+        <!-- Stats -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(56, 189, 248, 0.15); color: var(--accent-blue);">
@@ -346,51 +348,53 @@
                 </div>
                 <div class="stat-info">
                     <h3 id="statTotal">0</h3>
-                    <p>إجمالي العسكريين الحاليين</p>
+                    <p>Total Active Cadets</p>
                 </div>
             </div>
+
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green);">
                     <i class="fa-solid fa-clock"></i>
                 </div>
                 <div class="stat-info">
                     <h3 id="statHours">0</h3>
-                    <p>مجموع الساعات المسجلة</p>
+                    <p>Total Logged Hours</p>
                 </div>
             </div>
+
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: var(--accent-amber);">
                     <i class="fa-solid fa-file-contract"></i>
                 </div>
                 <div class="stat-info">
                     <h3 id="statReports">0</h3>
-                    <p>إجمالي التقارير</p>
+                    <p>Total MDT Reports</p>
                 </div>
             </div>
         </div>
 
-        <!-- أزرار التنقل -->
+        <!-- Tabs -->
         <div class="controls">
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('active', this)">
-                    <i class="fa-solid fa-users"></i> العسكريين الحاليين
+                    <i class="fa-solid fa-users"></i> Active Cadets
                 </button>
                 <button class="tab-btn" onclick="switchTab('archived', this)">
-                    <i class="fa-solid fa-box-archive"></i> الأرشيف (منزوعين الرتبة)
+                    <i class="fa-solid fa-box-archive"></i> Archived (Rank Removed)
                 </button>
             </div>
         </div>
 
-        <!-- الجدول -->
+        <!-- Table -->
         <div class="table-card">
             <table>
                 <thead>
                     <tr>
-                        <th>اسم العسكري</th>
-                        <th>الرتبة الحالية</th>
-                        <th>إجمالي الساعات</th>
-                        <th>تقارير الـ MDT</th>
-                        <th style="text-align: center;">الإجراءات والعمليات</th>
+                        <th>Officer Name</th>
+                        <th>Current Rank</th>
+                        <th>Total Hours</th>
+                        <th>MDT Reports</th>
+                        <th style="text-align: center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody"></tbody>
@@ -399,186 +403,54 @@
 
     </div>
 
-    <!-- نافذة عرض التقارير -->
+    <!-- Reports Modal -->
     <div class="modal-overlay" id="reportsModal">
         <div class="modal-card">
             <div class="modal-header">
-                <h3 id="modalOfficerName"><i class="fa-solid fa-folder-open"></i> تقارير العسكري</h3>
+                <h3 id="modalOfficerName"><i class="fa-solid fa-folder-open"></i> Officer Reports</h3>
                 <button class="close-btn" onclick="closeModal('reportsModal')"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div id="modalReportsList" style="max-height: 350px; overflow-y: auto;"></div>
         </div>
     </div>
 
-    <!-- نافذة التعديل اليدوي والتحديث -->
+    <!-- Edit Modal -->
     <div class="modal-overlay" id="editModal">
         <div class="modal-card">
             <div class="modal-header">
-                <h3 id="editOfficerName"><i class="fa-solid fa-pen-to-square"></i> تعديل البيانات وإضافة تقرير</h3>
+                <h3 id="editOfficerName"><i class="fa-solid fa-pen-to-square"></i> Edit Data & Add MDT Report</h3>
                 <button class="close-btn" onclick="closeModal('editModal')"><i class="fa-solid fa-xmark"></i></button>
             </div>
+
             <form id="manualEditForm">
                 <input type="hidden" id="editDiscordId">
+
                 <div class="form-group">
-                    <label><i class="fa-solid fa-stopwatch"></i> تعديل إجمالي الساعات:</label>
-                    <input type="number" step="0.5" id="manualHours" placeholder="مثال: 15.5">
+                    <label><i class="fa-solid fa-stopwatch"></i> Edit Total Hours:</label>
+                    <input type="number" step="0.5" id="manualHours" placeholder="Example: 15.5">
                 </div>
                 
                 <div style="margin: 20px 0 10px 0; border-top: 1px solid var(--card-border); padding-top: 15px;">
-                    <h4 style="font-size: 14px; color: var(--accent-amber);"><i class="fa-solid fa-plus-circle"></i> إضافة تقرير MDT سابق:</h4>
+                    <h4 style="font-size: 14px; color: var(--accent-amber);"><i class="fa-solid fa-plus-circle"></i> Add Previous MDT Report:</h4>
                 </div>
 
                 <div class="form-group">
-                    <label>عنوان التقرير:</label>
-                    <input type="text" id="manualReportTitle" placeholder="مثال: تقرير قضية سرقة أو دورية">
+                    <label>Report Title:</label>
+                    <input type="text" id="manualReportTitle" placeholder="Example: Theft Case Report">
                 </div>
+
                 <div class="form-group">
-                    <label>تفاصيل التقرير:</label>
-                    <textarea id="manualReportContent" rows="3" placeholder="أدخل تفاصيل التقرير أو الرابط..."></textarea>
+                    <label>Report Details:</label>
+                    <textarea id="manualReportContent" rows="3" placeholder="Enter report details or link..."></textarea>
                 </div>
-                <button type="submit" class="btn-submit"><i class="fa-solid fa-floppy-disk"></i> حفظ البيانات المحدثة</button>
+
+                <button type="submit" class="btn-submit">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Updated Data
+                </button>
             </form>
         </div>
     </div>
 
-    <script>
-        let allData = [];
-        let currentTab = 'active';
-
-        async function fetchCadets() {
-            try {
-                const res = await fetch('/api/cadets');
-                allData = await res.json();
-                updateStats();
-                renderTable();
-            } catch(e) { console.error(e); }
-        }
-
-        function updateStats() {
-            const activeOnly = allData.filter(i => i.status === 'active');
-            document.getElementById('statTotal').innerText = activeOnly.length;
-            
-            const totalH = activeOnly.reduce((acc, curr) => acc + (curr.hours || 0), 0);
-            document.getElementById('statHours').innerText = totalH + ' hrs';
-
-            const totalR = activeOnly.reduce((acc, curr) => acc + (curr.reports ? curr.reports.length : 0), 0);
-            document.getElementById('statReports').innerText = totalR;
-        }
-
-        function renderTable() {
-            const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = '';
-
-            const filtered = allData.filter(item => item.status === currentTab);
-
-            if (filtered.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding: 40px;">لا توجد بيانات مسجلة في هذا القسم حالياً</td></tr>`;
-                return;
-            }
-
-            filtered.forEach(item => {
-                const rankClass = item.rank === 'Solo Cadet' ? 'solo-cadet' : 'cadet';
-                const rankIcon = item.rank === 'Solo Cadet' ? 'fa-star' : 'fa-graduation-cap';
-                
-                tbody.innerHTML += `
-                    <tr>
-                        <td>
-                            <div class="officer-name">
-                                <i class="fa-solid fa-user-circle" style="font-size: 20px; color: var(--text-secondary);"></i>
-                                ${item.name}
-                            </div>
-                        </td>
-                        <td><span class="badge-rank ${rankClass}"><i class="fa-solid ${rankIcon}"></i> ${item.rank}</span></td>
-                        <td><span class="hours-tag">${item.hours || 0} ساعة</span></td>
-                        <td><i class="fa-solid fa-file-alt" style="color:var(--text-secondary); margin-left: 5px;"></i> ${item.reports ? item.reports.length : 0} تقارير</td>
-                        <td>
-                            <div class="actions" style="justify-content: center;">
-                                <button class="btn-action btn-view" onclick="showReports('${item.discordId}')">
-                                    <i class="fa-solid fa-eye"></i> التقارير
-                                </button>
-                                <button class="btn-action btn-edit" onclick="openEditModal('${item.discordId}')">
-                                    <i class="fa-solid fa-pen"></i> تعديل / إضافة
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-        }
-
-        function switchTab(tab, btn) {
-            currentTab = tab;
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            renderTable();
-        }
-
-        function showReports(discordId) {
-            const officer = allData.find(c => c.discordId === discordId);
-            if (!officer) return;
-
-            document.getElementById('modalOfficerName').innerText = `تقارير العسكري: ${officer.name}`;
-            const reportsList = document.getElementById('modalReportsList');
-            reportsList.innerHTML = '';
-
-            if (!officer.reports || officer.reports.length === 0) {
-                reportsList.innerHTML = '<p style="color:var(--text-secondary); text-align:center; padding: 20px;">لا توجد تقارير مسجلة لهذا العسكري.</p>';
-            } else {
-                officer.reports.forEach(rep => {
-                    reportsList.innerHTML += `
-                        <div style="background:rgba(15, 23, 42, 0.8); padding:12px 15px; border-radius:10px; margin-bottom:10px; border:1px solid var(--card-border);">
-                            <div style="font-size:11px; color:var(--accent-blue); font-weight:700;">${rep.date}</div>
-                            <div style="font-weight:700; margin-top:4px; font-size:14px;">${rep.title}</div>
-                            <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">${rep.content}</div>
-                        </div>
-                    `;
-                });
-            }
-
-            document.getElementById('reportsModal').style.display = 'flex';
-        }
-
-        function openEditModal(discordId) {
-            const officer = allData.find(c => c.discordId === discordId);
-            if (!officer) return;
-
-            document.getElementById('editDiscordId').value = officer.discordId;
-            document.getElementById('editOfficerName').innerText = `تعديل بيانات: ${officer.name}`;
-            document.getElementById('manualHours').value = officer.hours || 0;
-            document.getElementById('manualReportTitle').value = '';
-            document.getElementById('manualReportContent').value = '';
-
-            document.getElementById('editModal').style.display = 'flex';
-        }
-
-        function closeModal(id) {
-            document.getElementById(id).style.display = 'none';
-        }
-
-        document.getElementById('manualEditForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const discordId = document.getElementById('editDiscordId').value;
-            const hours = document.getElementById('manualHours').value;
-            const reportTitle = document.getElementById('manualReportTitle').value;
-            const reportContent = document.getElementById('manualReportContent').value;
-
-            try {
-                const res = await fetch('/api/update-cadet-manual', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ discordId, hours, reportTitle, reportContent })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    closeModal('editModal');
-                    fetchCadets();
-                }
-            } catch (err) {
-                console.error(err);
-            }
-        });
-
-        fetchCadets();
-    </script>
+    <script src="script.js"></script>
 </body>
 </html>
