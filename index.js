@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// توجيه Express لقراءة الملفات الساكنة (CSS, JS, HTML) من مجلد public
+// توجيه Express لقراءة الملفات الساكنة من مجلد public
 app.use(express.static(path.join(__dirname, 'public')));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -23,6 +23,9 @@ const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
 const REPORTS_CHANNEL_ID = '1520998767325741148';
 const HOURS_CHANNEL_ID = '1530564311217471639';
+
+// قائمة معرّفات الديسكورد للمسؤولين (صاحب الحساب مقبول تلقائياً)
+const ADMIN_IDS = ['771747917040058388'];
 
 let cadetsData = [];
 let users = [];
@@ -186,19 +189,35 @@ app.post('/api/update-cadet', (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json(logs));
 
+// نظام التسجيل والقبول المحسّن
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = users.find(u => u.copyId === copyId);
 
+    const isAdmin = ADMIN_IDS.includes(copyId);
+
+    // إذا كان المستخدم موجوداً مسابقاً
     if (user) {
-        return res.json({ success: true, approved: user.approved, user });
+        // إذا كان مسؤولاً، نضمن تفعيل حسابه دائماً
+        if (isAdmin) user.approved = true;
+        
+        user.username = username || user.username;
+        user.lastActive = Date.now();
+        
+        return res.json({ 
+            success: true, 
+            approved: user.approved, 
+            isAdmin: isAdmin,
+            user 
+        });
     }
 
+    // إنشاء مستخدم جديد
     const newUser = {
         username,
         copyId,
-        approved: false,
-        status: 'no-active',
+        approved: isAdmin, // يتفعل تلقائياً إذا كان أدمن، وإلا ينتظر الموافقة
+        status: 'active',
         lastActive: Date.now()
     };
     users.push(newUser);
@@ -206,14 +225,20 @@ app.post('/api/login-request', (req, res) => {
     logs.unshift({
         id: Date.now(),
         by: username,
-        action: 'طلب دخول جديد للموقع',
+        action: isAdmin ? 'تسجيل دخول مسئول (تلقائي)' : 'طلب دخول جديد للموقع',
         target: 'النظام',
         time: new Date().toLocaleString('ar-SA')
     });
 
     io.emit("usersUpdate", users);
     io.emit("logsUpdate", logs);
-    res.json({ success: true, approved: false, user: newUser });
+
+    res.json({ 
+        success: true, 
+        approved: newUser.approved, 
+        isAdmin: isAdmin, 
+        user: newUser 
+    });
 });
 
 app.post('/api/approve-user', (req, res) => {
@@ -225,7 +250,7 @@ app.post('/api/approve-user', (req, res) => {
         logs.unshift({
             id: Date.now(),
             by: adminName || 'Admin',
-            action: approve ? 'قبول دخول المستخدم' : 'رفض/إلغاء دخول المستخدم',
+            action: approve ? 'قبول دخول المستخدم (دائم)' : 'رفض/إلغاء دخول المستخدم',
             target: user.username,
             time: new Date().toLocaleString('ar-SA')
         });
