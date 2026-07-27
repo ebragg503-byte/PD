@@ -1,6 +1,24 @@
+// =========================
+// Socket.io (تحديث مباشر)
+// =========================
+const socket = io();
+
+// كل ما يرسل السيرفر تحديث جديد
+socket.on("cadetsUpdate", (data) => {
+    allData = data;
+    updateStats();
+    renderTable();
+});
+
+// =========================
+// المتغيرات الأساسية
+// =========================
 let allData = [];
 let currentTab = 'active';
 
+// =========================
+// جلب البيانات أول مرة فقط
+// =========================
 async function fetchCadets() {
     try {
         const res = await fetch('/api/cadets');
@@ -12,6 +30,9 @@ async function fetchCadets() {
     }
 }
 
+// =========================
+// تحديث الإحصائيات
+// =========================
 function updateStats() {
     const activeOnly = allData.filter(i => i.status === 'active');
     document.getElementById('statTotal').innerText = activeOnly.length;
@@ -23,6 +44,9 @@ function updateStats() {
     document.getElementById('statReports').innerText = totalR;
 }
 
+// =========================
+// عرض الجدول
+// =========================
 function renderTable() {
     const tbody = document.getElementById('tableBody');
     tbody.innerHTML = '';
@@ -66,6 +90,9 @@ function renderTable() {
     });
 }
 
+// =========================
+// التبديل بين التابات
+// =========================
 function switchTab(tab, btn) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -73,6 +100,9 @@ function switchTab(tab, btn) {
     renderTable();
 }
 
+// =========================
+// عرض التقارير
+// =========================
 function showReports(discordId) {
     const officer = allData.find(c => c.discordId === discordId);
     if (!officer) return;
@@ -98,6 +128,9 @@ function showReports(discordId) {
     document.getElementById('reportsModal').style.display = 'flex';
 }
 
+// =========================
+// فتح نافذة التعديل
+// =========================
 function openEditModal(discordId) {
     const officer = allData.find(c => c.discordId === discordId);
     if (!officer) return;
@@ -115,6 +148,9 @@ function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
+// =========================
+// حفظ التعديلات اليدوية
+// =========================
 document.getElementById('manualEditForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const discordId = document.getElementById('editDiscordId').value;
@@ -131,12 +167,13 @@ document.getElementById('manualEditForm').addEventListener('submit', async (e) =
         const data = await res.json();
         if (data.success) {
             closeModal('editModal');
-            fetchCadets();
         }
     } catch (err) {
         console.error(err);
     }
 });
 
+// =========================
+// تشغيل أولي
+// =========================
 fetchCadets();
-setInterval(fetchCadets, 3000);
