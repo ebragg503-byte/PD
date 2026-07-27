@@ -11,23 +11,21 @@ const io = new Server(server, { cors: { origin: "*" } });
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// قراءة الملفات من المجلد الرئيسي للمشروع مباشرة
+app.use(express.static(path.join(__dirname)));
 
-// إعدادات البوت والشبكة
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const GUILD_ID = '1517858234378227834';
-const CADET_ROLE_ID = '1520526818225164329';
-const SOLO_CADET_ROLE_ID = '1522994966597468191';
+const GUILD_ID = '1517858234378227834';[cite: 3]
+const CADET_ROLE_ID = '1520526818225164329';[cite: 3]
+const SOLO_CADET_ROLE_ID = '1522994966597468191';[cite: 3]
 
-const REPORTS_CHANNEL_ID = '1520998767325741148';
-const HOURS_CHANNEL_ID = '1530564311217471639';
+const REPORTS_CHANNEL_ID = '1520998767325741148';[cite: 3]
+const HOURS_CHANNEL_ID = '1530564311217471639';[cite: 3]
 
-// قواعد البيانات في الذاكرة (Memory Store)
-let cadetsData = [];
-let users = []; // المستخدمين وحالتهم وطلبات الموافقة
-let logs = [];  // سجل التعديلات
+let cadetsData = [];[cite: 3]
+let users = [];[cite: 3]
+let logs = [];[cite: 3]
 
-// قائمة الوينقات المتاحة
 const ALL_WINGS = [
     { id: "motorcycle", name: "MotorCycle Wing", icon: "fa-motorcycle" },
     { id: "airship", name: "Airship Wing", icon: "fa-plane-departure" },
@@ -45,7 +43,6 @@ const client = new Client({
     ]
 });
 
-// تزامن الأعضاء مع الديسكورد
 function syncMember(member) {
     const isCadet = member.roles.cache.has(CADET_ROLE_ID);
     const isSolo = member.roles.cache.has(SOLO_CADET_ROLE_ID);
@@ -93,7 +90,6 @@ client.on('guildMemberUpdate', (oldM, newM) => {
     io.emit("cadetsUpdate", cadetsData);
 });
 
-// قراءة الساعات والتقارير المباشرة
 client.on('messageCreate', msg => {
     if (msg.author.bot) return;
     let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
@@ -135,12 +131,9 @@ client.on('messageCreate', msg => {
     }
 });
 
-// --- API Endpoints ---
-
-// 1. بيانات العسكريين
+// API Routes
 app.get('/api/cadets', (req, res) => res.json(cadetsData));
 
-// 2. تحديث الساعات والتقارير والنقاط والوينقات
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy } = req.body;
     let cadet = cadetsData.find(c => c.discordId === discordId);
@@ -160,7 +153,7 @@ app.post('/api/update-cadet', (req, res) => {
     }
 
     if (wings !== undefined) {
-        cadet.wings = wings; // Array of wing ids
+        cadet.wings = wings;
         changes.push(`تحديث الوينقات`);
     }
 
@@ -189,10 +182,8 @@ app.post('/api/update-cadet', (req, res) => {
     res.json({ success: true });
 });
 
-// 3. سجل اللوقات
 app.get('/api/logs', (req, res) => res.json(logs));
 
-// 4. نظام تسجيل الدخول والموافقة وحالة النشاط
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = users.find(u => u.copyId === copyId);
@@ -205,7 +196,7 @@ app.post('/api/login-request', (req, res) => {
         username,
         copyId,
         approved: false,
-        status: 'no-active', // active | sleep | no-active
+        status: 'no-active',
         lastActive: Date.now()
     };
     users.push(newUser);
@@ -248,7 +239,7 @@ app.post('/api/user-heartbeat', (req, res) => {
     const { copyId, status } = req.body;
     let user = users.find(u => u.copyId === copyId);
     if (user) {
-        user.status = status; // active or sleep
+        user.status = status;
         user.lastActive = Date.now();
         io.emit("usersUpdate", users);
     }
@@ -258,7 +249,6 @@ app.post('/api/user-heartbeat', (req, res) => {
 app.get('/api/users', (req, res) => res.json(users));
 app.get('/api/wings-list', (req, res) => res.json(ALL_WINGS));
 
-// فحص خمول المستخدمين كل 15 ثانية تحويلهم لـ no-active إذا أغلقوا الصفحة
 setInterval(() => {
     const now = Date.now();
     let updated = false;
@@ -271,9 +261,15 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-// توجيه جميع المسارات لـ index.html
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// مسار الصفحات الرئيسي
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
+
+if (BOT_TOKEN) {
+    client.login(BOT_TOKEN);
+} else {
+    console.log("⚠️ No BOT_TOKEN provided in environment variables.");
+}
