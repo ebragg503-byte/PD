@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,8 +12,9 @@ const io = new Server(server, { cors: { origin: "*" } });
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-// قراءة الملفات من المجلد الرئيسي للمشروع مباشرة
-app.use(express.static(path.join(__dirname)));
+
+// تقديم الملفات الساكنة (مثل css, js, images) من المجلد الرئيسي
+app.use(express.static(__dirname));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
@@ -261,9 +263,14 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-// مسار الصفحات الرئيسي
+// مسار الصفحة الرئيسية المقوّى لمنع أخطاء المسارات
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    const indexPath = path.resolve(__dirname, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(404).send("Error: index.html was not found in the root directory.");
+    }
 });
 
 server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
