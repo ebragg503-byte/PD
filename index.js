@@ -13,8 +13,8 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// تقديم الملفات الساكنة (مثل css, js, images) من المجلد الرئيسي
-app.use(express.static(__dirname));
+// توجيه Express لقراءة الملفات الساكنة (CSS, JS, HTML) من مجلد public
+app.use(express.static(path.join(__dirname, 'public')));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
@@ -263,13 +263,13 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-// مسار الصفحة الرئيسية المقوّى لمنع أخطاء المسارات
+// مسار الصفحة الرئيسية يقرأ من مجلد public
 app.get('/', (req, res) => {
-    const indexPath = path.resolve(__dirname, 'index.html');
+    const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
     } else {
-        res.status(404).send("Error: index.html was not found in the root directory.");
+        res.status(404).send("Error: index.html was not found in public directory.");
     }
 });
 
