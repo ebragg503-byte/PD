@@ -2,21 +2,18 @@ const express = require('express');
 const { Client, GatewayIntentBits } = require('discord.js');
 const path = require('path');
 const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Socket.io (تحديث مباشر للواجهة)
-const { Server } = require('socket.io');
-const io = new Server(server, {
-    cors: { origin: "*" }
-});
-
-// إعدادات الديسكورد والرومات
+// إعدادات البوت والشبكة
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
@@ -25,22 +22,18 @@ const SOLO_CADET_ROLE_ID = '1522994966597468191';
 const REPORTS_CHANNEL_ID = '1520998767325741148';
 const HOURS_CHANNEL_ID = '1530564311217471639';
 
-// بيانات العسكريين
+// قواعد البيانات في الذاكرة (Memory Store)
 let cadetsData = [];
+let users = []; // المستخدمين وحالتهم وطلبات الموافقة
+let logs = [];  // سجل التعديلات
 
-// بيانات المستخدمين (اللي يدخلون الموقع)
-let users = [];
-
-// اللوقات (من عدّل؟)
-let logs = [];
-
-// الوِنقات (Wings)
-const WINGS = [
-    { id: "airship", name: "Airship Wing", icon: "fa-jet-fighter", color: "#38bdf8" },
-    { id: "interceptor", name: "Interceptor Wing", icon: "fa-shield-halved", color: "#6366f1" },
-    { id: "motorcycle", name: "MotorCycle Wing", icon: "fa-motorcycle", color: "#10b981" },
-    { id: "negotiator", name: "Negotiator Wing", icon: "fa-comments", color: "#f59e0b" },
-    { id: "dispatch", name: "Dispatch Wing", icon: "fa-headset", color: "#ef4444" }
+// قائمة الوينقات المتاحة
+const ALL_WINGS = [
+    { id: "motorcycle", name: "MotorCycle Wing", icon: "fa-motorcycle" },
+    { id: "airship", name: "Airship Wing", icon: "fa-plane-departure" },
+    { id: "navigation", name: "Navigation Wing", icon: "fa-compass" },
+    { id: "dispatch", name: "Dispatch Wing", icon: "fa-headset" },
+    { id: "interceptor", name: "Interceptor Wing", icon: "fa-car-burst" }
 ];
 
 const client = new Client({
@@ -52,328 +45,235 @@ const client = new Client({
     ]
 });
 
-client.once('ready', async () => {
-    console.log(`🤖 Bot is running as: ${client.user.tag}`);
-    try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const members = await guild.members.fetch();
-
-        members.forEach(member => {
-            checkAndSyncMember(member);
-        });
-
-        console.log(`✅ Synced all cadets successfully.`);
-        io.emit("cadetsUpdate", cadetsData);
-    } catch (err) {
-        console.error('❌ Error while syncing members:', err);
-    }
-});
-
-function checkAndSyncMember(member) {
+// تزامن الأعضاء مع الديسكورد
+function syncMember(member) {
     const isCadet = member.roles.cache.has(CADET_ROLE_ID);
-    const isSoloCadet = member.roles.cache.has(SOLO_CADET_ROLE_ID);
+    const isSolo = member.roles.cache.has(SOLO_CADET_ROLE_ID);
+    let cadet = cadetsData.find(c => c.discordId === member.id);
 
-    let existing = cadetsData.find(c => c.discordId === member.id);
+    if (isCadet || isSolo) {
+        const rank = isSolo ? 'Solo Cadet' : 'Cadet';
+        const name = member.displayName || member.user.username;
 
-    if (isCadet || isSoloCadet) {
-        const rankName = isSoloCadet ? 'Solo Cadet' : 'Cadet';
-        const displayName = member.displayName || member.user.username;
-
-        if (existing) {
-            existing.name = displayName;
-            existing.rank = rankName;
-            existing.status = 'active';
+        if (cadet) {
+            cadet.name = name;
+            cadet.rank = rank;
+            cadet.status = 'active';
         } else {
             cadetsData.push({
                 discordId: member.id,
-                name: displayName,
-                rank: rankName,
+                name: name,
+                rank: rank,
                 hours: 0,
-                reports: [],
-                status: 'active',
                 points: 0,
-                badges: []
+                reports: [],
+                wings: [],
+                status: 'active'
             });
         }
-    } else if (existing) {
-        existing.status = 'archived';
+    } else if (cadet) {
+        cadet.status = 'archived';
     }
 }
 
-client.on('guildMemberUpdate', async (oldMember, newMember) => {
-    checkAndSyncMember(newMember);
+client.once('ready', async () => {
+    console.log(`🤖 Bot online as ${client.user.tag}`);
+    try {
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const members = await guild.members.fetch();
+        members.forEach(m => syncMember(m));
+        io.emit("cadetsUpdate", cadetsData);
+    } catch (e) {
+        console.error("Sync error:", e);
+    }
+});
+
+client.on('guildMemberUpdate', (oldM, newM) => {
+    syncMember(newM);
     io.emit("cadetsUpdate", cadetsData);
 });
 
-// استخراج أرقام الساعات من الرسالة
-function parseHours(text) {
-    if (!text) return 0;
-    const match = text.match(/(\d+(?:\.\d+)?)/);
-    return match ? parseFloat(match[1]) : 0;
-}
-
-client.on('messageCreate', message => {
-    if (message.author.bot) return;
-
-    const authorId = message.author.id;
-    let cadet = cadetsData.find(c => c.discordId === authorId && c.status === 'active');
-
+// قراءة الساعات والتقارير المباشرة
+client.on('messageCreate', msg => {
+    if (msg.author.bot) return;
+    let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
     if (!cadet) return;
 
-    if (message.channel.id === HOURS_CHANNEL_ID) {
-        const hoursToAdd = parseHours(message.content);
-        if (hoursToAdd > 0) {
-            cadet.hours += hoursToAdd;
-            console.log(`⏱️ Added ${hoursToAdd} hours to: ${cadet.name}`);
-            logs.push({
+    if (msg.channel.id === HOURS_CHANNEL_ID) {
+        const match = msg.content.match(/(\d+(?:\.\d+)?)/);
+        if (match) {
+            const added = parseFloat(match[1]);
+            cadet.hours += added;
+            logs.unshift({
                 id: Date.now(),
-                action: `Added ${hoursToAdd} hours (channel)`,
-                by: message.author.username,
+                by: msg.author.username,
+                action: `إضافة ${added} ساعة تلقائياً`,
                 target: cadet.name,
-                date: new Date().toLocaleString()
+                time: new Date().toLocaleString('ar-SA')
             });
             io.emit("cadetsUpdate", cadetsData);
+            io.emit("logsUpdate", logs);
         }
     }
 
-    if (message.channel.id === REPORTS_CHANNEL_ID) {
+    if (msg.channel.id === REPORTS_CHANNEL_ID) {
         cadet.reports.push({
-            id: message.id,
-            title: message.content.slice(0, 50) || 'New MDT Report',
-            content: message.content || 'Contains attachments or images',
-            date: new Date().toLocaleDateString('en-US')
+            id: msg.id,
+            title: msg.content.slice(0, 40) || 'تقرير جديد',
+            content: msg.content,
+            date: new Date().toLocaleDateString()
         });
-        logs.push({
+        logs.unshift({
             id: Date.now(),
-            action: `New MDT report from channel`,
-            by: message.author.username,
+            by: msg.author.username,
+            action: `إضافة تقرير MDT تلقائياً`,
             target: cadet.name,
-            date: new Date().toLocaleString()
+            time: new Date().toLocaleString('ar-SA')
         });
         io.emit("cadetsUpdate", cadetsData);
+        io.emit("logsUpdate", logs);
     }
 });
 
-// -------------------------------------------------------------
-// API العسكريين
-// -------------------------------------------------------------
-app.get('/api/cadets', (req, res) => {
-    res.json(cadetsData);
-});
+// --- API Endpoints ---
 
-app.post('/api/update-cadet-manual', (req, res) => {
-    const { discordId, hours, reportTitle, reportContent, by } = req.body;
+// 1. بيانات العسكريين
+app.get('/api/cadets', (req, res) => res.json(cadetsData));
+
+// 2. تحديث الساعات والتقارير والنقاط والوينقات
+app.post('/api/update-cadet', (req, res) => {
+    const { discordId, hours, points, reportTitle, reportContent, wings, editedBy } = req.body;
     let cadet = cadetsData.find(c => c.discordId === discordId);
 
-    if (cadet) {
-        if (hours !== undefined && hours !== '') {
-            cadet.hours = parseFloat(hours);
-        }
-        if (reportTitle || reportContent) {
-            cadet.reports.push({
-                id: Date.now().toString(),
-                title: reportTitle || 'Manual Report',
-                content: reportContent || 'No additional details',
-                date: new Date().toLocaleDateString('en-US')
-            });
-        }
-        logs.push({
-            id: Date.now(),
-            action: 'Manual update (hours/reports)',
-            by: by || 'Manual',
-            target: cadet.name,
-            date: new Date().toLocaleString()
+    if (!cadet) return res.status(404).json({ success: false, message: 'العسكري غير موجود' });
+
+    let changes = [];
+
+    if (hours !== undefined && hours !== '') {
+        changes.push(`تعديل الساعات إلى (${hours})`);
+        cadet.hours = parseFloat(hours);
+    }
+
+    if (points !== undefined && points !== '') {
+        changes.push(`تعديل النقاط إلى (${points})`);
+        cadet.points = parseInt(points);
+    }
+
+    if (wings !== undefined) {
+        cadet.wings = wings; // Array of wing ids
+        changes.push(`تحديث الوينقات`);
+    }
+
+    if (reportTitle || reportContent) {
+        cadet.reports.push({
+            id: Date.now().toString(),
+            title: reportTitle || 'تقرير يدوي',
+            content: reportContent || '-',
+            date: new Date().toLocaleDateString()
         });
-        io.emit("cadetsUpdate", cadetsData);
-        res.json({ success: true, message: 'Updated successfully!' });
-    } else {
-        res.status(404).json({ success: false, message: 'Cadet not found' });
+        changes.push(`إضافة تقرير يدوي`);
     }
-});
 
-// -------------------------------------------------------------
-// نظام النقاط Points
-// -------------------------------------------------------------
-app.post('/api/update-points', (req, res) => {
-    const { discordId, points, by } = req.body;
-
-    const cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return res.json({ success: false });
-
-    cadet.points = Number(points);
-
-    logs.push({
-        id: Date.now(),
-        action: `Updated points to ${points}`,
-        by: by || 'Admin',
-        target: cadet.name,
-        date: new Date().toLocaleString()
-    });
+    if (changes.length > 0) {
+        logs.unshift({
+            id: Date.now(),
+            by: editedBy || 'Admin',
+            action: changes.join(' | '),
+            target: cadet.name,
+            time: new Date().toLocaleString('ar-SA')
+        });
+    }
 
     io.emit("cadetsUpdate", cadetsData);
+    io.emit("logsUpdate", logs);
     res.json({ success: true });
 });
 
-// -------------------------------------------------------------
-// نظام الوِنقات Wings
-// -------------------------------------------------------------
-app.post('/api/add-badge', (req, res) => {
-    const { discordId, badgeId, by } = req.body;
+// 3. سجل اللوقات
+app.get('/api/logs', (req, res) => res.json(logs));
 
-    const cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return res.json({ success: false });
+// 4. نظام تسجيل الدخول والموافقة وحالة النشاط
+app.post('/api/login-request', (req, res) => {
+    const { username, copyId } = req.body;
+    let user = users.find(u => u.copyId === copyId);
 
-    const badge = WINGS.find(b => b.id === badgeId);
-    if (!badge) return res.json({ success: false });
-
-    if (!cadet.badges.some(b => b.id === badgeId)) {
-        cadet.badges.push(badge);
+    if (user) {
+        return res.json({ success: true, approved: user.approved, user });
     }
 
-    logs.push({
-        id: Date.now(),
-        action: `Added wing: ${badge.name}`,
-        by: by || 'Admin',
-        target: cadet.name,
-        date: new Date().toLocaleString()
-    });
-
-    io.emit("cadetsUpdate", cadetsData);
-    res.json({ success: true });
-});
-
-app.post('/api/remove-badge', (req, res) => {
-    const { discordId, badgeId, by } = req.body;
-
-    const cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return res.json({ success: false });
-
-    cadet.badges = cadet.badges.filter(b => b.id !== badgeId);
-
-    logs.push({
-        id: Date.now(),
-        action: `Removed wing: ${badgeId}`,
-        by: by || 'Admin',
-        target: cadet.name,
-        date: new Date().toLocaleString()
-    });
-
-    io.emit("cadetsUpdate", cadetsData);
-    res.json({ success: true });
-});
-
-// -------------------------------------------------------------
-// نظام المستخدمين + تسجيل الدخول
-// -------------------------------------------------------------
-app.post('/api/request-access', (req, res) => {
-    const { discordId, username } = req.body;
-
-    let existing = users.find(u => u.discordId === discordId);
-
-    if (existing) {
-        return res.json({ success: true, exists: true, approved: existing.approved });
-    }
-
-    users.push({
-        discordId,
+    const newUser = {
         username,
+        copyId,
         approved: false,
-        status: 'not-active',
-        lastSeen: Date.now()
-    });
+        status: 'no-active', // active | sleep | no-active
+        lastActive: Date.now()
+    };
+    users.push(newUser);
 
-    logs.push({
+    logs.unshift({
         id: Date.now(),
-        action: 'Requested access',
         by: username,
-        target: 'System',
-        date: new Date().toLocaleString()
+        action: 'طلب دخول جديد للموقع',
+        target: 'النظام',
+        time: new Date().toLocaleString('ar-SA')
     });
 
-    res.json({ success: true, exists: false });
+    io.emit("usersUpdate", users);
+    io.emit("logsUpdate", logs);
+    res.json({ success: true, approved: false, user: newUser });
 });
 
 app.post('/api/approve-user', (req, res) => {
-    const { discordId } = req.body;
+    const { copyId, approve, adminName } = req.body;
+    let user = users.find(u => u.copyId === copyId);
 
-    const user = users.find(u => u.discordId === discordId);
-    if (!user) return res.json({ success: false });
+    if (user) {
+        user.approved = approve;
+        logs.unshift({
+            id: Date.now(),
+            by: adminName || 'Admin',
+            action: approve ? 'قبول دخول المستخدم' : 'رفض/إلغاء دخول المستخدم',
+            target: user.username,
+            time: new Date().toLocaleString('ar-SA')
+        });
+        io.emit("usersUpdate", users);
+        io.emit("logsUpdate", logs);
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ success: false });
+    }
+});
 
-    user.approved = true;
+app.post('/api/user-heartbeat', (req, res) => {
+    const { copyId, status } = req.body;
+    let user = users.find(u => u.copyId === copyId);
+    if (user) {
+        user.status = status; // active or sleep
+        user.lastActive = Date.now();
+        io.emit("usersUpdate", users);
+    }
+    res.json({ success: true });
+});
 
-    logs.push({
-        id: Date.now(),
-        action: 'Approved user',
-        by: 'Admin',
-        target: user.username,
-        date: new Date().toLocaleString()
+app.get('/api/users', (req, res) => res.json(users));
+app.get('/api/wings-list', (req, res) => res.json(ALL_WINGS));
+
+// فحص خمول المستخدمين كل 15 ثانية تحويلهم لـ no-active إذا أغلقوا الصفحة
+setInterval(() => {
+    const now = Date.now();
+    let updated = false;
+    users.forEach(u => {
+        if (u.status !== 'no-active' && (now - u.lastActive > 30000)) {
+            u.status = 'no-active';
+            updated = true;
+        }
     });
+    if (updated) io.emit("usersUpdate", users);
+}, 15000);
 
-    res.json({ success: true });
-});
-
-app.get('/api/users', (req, res) => {
-    res.json(users);
-});
-
-app.post('/api/update-status', (req, res) => {
-    const { discordId, status } = req.body;
-
-    const user = users.find(u => u.discordId === discordId);
-    if (!user) return res.json({ success: false });
-
-    user.status = status;
-    user.lastSeen = Date.now();
-
-    res.json({ success: true });
-});
-
-// -------------------------------------------------------------
-// نظام اللوقات Logs
-// -------------------------------------------------------------
-app.get('/api/logs', (req, res) => {
-    res.json(logs);
-});
-
-// -------------------------------------------------------------
-// Routes للواجهات
-// -------------------------------------------------------------
-app.get('/dashboard', (req, res) => {
+// توجيه جميع المسارات لـ index.html
+app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/login', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
-});
-
-app.get('/admin-approval', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin-approval.html'));
-});
-
-app.get('/users-status', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'users-status.html'));
-});
-
-app.get('/logs-page', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'logs.html'));
-});
-
-app.get('/points', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'points.html'));
-});
-
-app.get('/wings', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'wings.html'));
-});
-
-// مسار افتراضي يرجّع الـ Dashboard
-app.get(/(.*)/, (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-server.listen(PORT, () => {
-    console.log(`🌐 Dashboard running on port: ${PORT}`);
-});
-
-// تسجيل الدخول للبوت
-client.login(BOT_TOKEN);
+server.listen(PORT, () => console.log(`Server started on port ${PORT}`));
