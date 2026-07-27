@@ -75,7 +75,7 @@
 
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-secondary); }
-        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; outline: none; }
+        .form-group input, .form-group textarea { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; outline: none; }
 
         .wings-checkboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; }
         .wings-checkboxes label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: #fff; }
@@ -88,7 +88,6 @@
 </head>
 <body>
 
-    <!-- نافذة تسجيل الدخول الإلزامية -->
     <div class="modal-overlay" id="loginModal" style="display: flex;">
         <div class="modal-card" style="text-align: center;">
             <i class="fa-solid fa-shield-cat" style="font-size: 45px; color: var(--accent-blue); margin-bottom: 15px;"></i>
@@ -109,7 +108,6 @@
     </div>
 
     <div class="container">
-        <!-- Navbar -->
         <div class="navbar">
             <div class="brand">
                 <i class="fa-solid fa-shield-halved"></i>
@@ -127,7 +125,6 @@
             </div>
         </div>
 
-        <!-- الإحصائيات -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(56, 189, 248, 0.15); color: var(--accent-blue);"><i class="fa-solid fa-users"></i></div>
@@ -143,7 +140,6 @@
             </div>
         </div>
 
-        <!-- الأقسام (Tabs) -->
         <div class="nav-tabs">
             <button class="tab-btn active" onclick="switchView('cadets', this)"><i class="fa-solid fa-user-shield"></i> قائمة العسكريين</button>
             <button class="tab-btn" onclick="switchView('users', this)"><i class="fa-solid fa-users-viewfinder"></i> المتواجدون بالموقع</button>
@@ -151,7 +147,6 @@
             <button class="tab-btn" onclick="switchView('logs', this)"><i class="fa-solid fa-scroll"></i> سجل التعديلات (Logs)</button>
         </div>
 
-        <!-- 1. جدول العسكريين -->
         <div id="viewCadets" class="table-card">
             <table>
                 <thead>
@@ -169,7 +164,6 @@
             </table>
         </div>
 
-        <!-- 2. جدول المتواجدين بالموقع -->
         <div id="viewUsers" class="table-card" style="display: none;">
             <table>
                 <thead>
@@ -184,7 +178,6 @@
             </table>
         </div>
 
-        <!-- 3. جدول طلبات الموافقة -->
         <div id="viewApproval" class="table-card" style="display: none;">
             <table>
                 <thead>
@@ -198,7 +191,6 @@
             </table>
         </div>
 
-        <!-- 4. جدول اللوقات -->
         <div id="viewLogs" class="table-card" style="display: none;">
             <table>
                 <thead>
@@ -214,7 +206,6 @@
         </div>
     </div>
 
-    <!-- Modal التعديل الشامل -->
     <div class="modal-overlay" id="editModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
@@ -254,7 +245,6 @@
         </div>
     </div>
 
-    <!-- Modal عرض الوينقات -->
     <div class="modal-overlay" id="wingsModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
@@ -265,7 +255,6 @@
         </div>
     </div>
 
-    <!-- Modal عرض التقارير -->
     <div class="modal-overlay" id="reportsModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
