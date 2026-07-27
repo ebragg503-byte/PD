@@ -16,15 +16,15 @@ app.use(express.static(path.join(__dirname)));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
-const CADET_ROLE_ID = '1520526818225164329';[cite: 3]
-const SOLO_CADET_ROLE_ID = '1522994966597468191';[cite: 3]
+const CADET_ROLE_ID = '1520526818225164329';
+const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
-const REPORTS_CHANNEL_ID = '1520998767325741148';[cite: 3]
-const HOURS_CHANNEL_ID = '1530564311217471639';[cite: 3]
+const REPORTS_CHANNEL_ID = '1520998767325741148';
+const HOURS_CHANNEL_ID = '1530564311217471639';
 
-let cadetsData = [];[cite: 3]
-let users = [];[cite: 3]
-let logs = [];[cite: 3]
+let cadetsData = [];
+let users = [];
+let logs = [];
 
 const ALL_WINGS = [
     { id: "motorcycle", name: "MotorCycle Wing", icon: "fa-motorcycle" },
