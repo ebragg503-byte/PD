@@ -21,6 +21,8 @@ const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
 const REPORTS_CHANNEL_ID = '1520998767325741148';
 const HOURS_CHANNEL_ID = '1530564311217471639';
+const POINTS_CHANNEL_ID = '1523610705742266378';
+const WINGS_CHANNEL_ID = '1520527213597032558';
 
 const ADMIN_IDS = ['771747917040058388'];
 
@@ -45,44 +47,46 @@ const client = new Client({
     ]
 });
 
-// دالة لمعالجة نصوص الـ Embeds واستخراج الساعات أو الدقائق منها
+// دالة محسنة لمعالجة نصوص الـ Embeds واستخراج الساعات والدقائق والـ Discord ID
 function parseDutyMessage(message) {
     let discordId = null;
     let totalHours = null;
 
-    // استخراج Discord ID
-    const mentionMatch = message.content?.match(/<@!?(\d+)>/) || JSON.stringify(message.embeds).match(/<@!?(\d+)>/);
-    if (mentionMatch) {
-        discordId = mentionMatch[1];
+    let fullText = message.content || '';
+    if (message.embeds && message.embeds.length > 0) {
+        message.embeds.forEach(embed => {
+            fullText += ' ' + (embed.title || '') + ' ' + (embed.description || '');
+            if (embed.fields) {
+                embed.fields.forEach(f => {
+                    fullText += ` ${f.name} ${f.value}`;
+                });
+            }
+        });
     }
 
-    // البحث داخل الـ Embeds الخاصة بـ qb-management
-    if (message.embeds && message.embeds.length > 0) {
-        for (const embed of message.embeds) {
-            // البحث عن Discord ID في الحقول
-            if (!discordId && embed.fields) {
-                const discordField = embed.fields.find(f => f.name.includes('Discord'));
-                if (discordField) {
-                    const idMatch = discordField.value.match(/(\d+)/);
-                    if (idMatch) discordId = idMatch[1];
-                }
-            }
+    // 1. استخراج Discord ID من المنشن أو الحقول النصية
+    const mentionMatch = fullText.match(/<@!?(\d+)>/);
+    if (mentionMatch) {
+        discordId = mentionMatch[1];
+    } else {
+        const idMatch = fullText.match(/Discord\s*[:|-]?\s*<@!?(\d+)>|Discord\s*[:|-]?\s*(\d{17,19})/i);
+        if (idMatch) discordId = idMatch[1] || idMatch[2];
+    }
 
-            // استخراج الساعات والدقائق (Total Duty Time أو Total Minutes)
-            let textToSearch = (embed.description || '') + ' ' + (embed.fields ? embed.fields.map(f => `${f.name} ${f.value}`).join(' ') : '');
-            
-            // 1. تجربة قراءة Total Minutes
-            const minutesMatch = textToSearch.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i);
-            if (minutesMatch) {
-                totalHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
-            } else {
-                // 2. تجربة قراءة Total Duty Time (مثال: 18h 00m)
-                const dutyTimeMatch = textToSearch.match(/Total Duty Time\s*[\r\n]*\s*(\d+)h\s*(\d+)m/i);
-                if (dutyTimeMatch) {
-                    const hrs = parseInt(dutyTimeMatch[1]);
-                    const mins = parseInt(dutyTimeMatch[2]);
-                    totalHours = parseFloat((hrs + (mins / 60)).toFixed(2));
-                }
+    // 2. تجربة قراءة Total Minutes / Time In Server / Total Duty Time
+    const minutesMatch = fullText.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i) || fullText.match(/Time In Server\s*[\r\n]*\s*(\d+)m/i);
+    if (minutesMatch) {
+        totalHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
+    } else {
+        const dutyTimeMatch = fullText.match(/(?:Total Duty Time|Time In Server)\s*[\r\n]*\s*(\d+)h\s*(\d+)m/i);
+        if (dutyTimeMatch) {
+            const hrs = parseInt(dutyTimeMatch[1]);
+            const mins = parseInt(dutyTimeMatch[2]);
+            totalHours = parseFloat((hrs + (mins / 60)).toFixed(2));
+        } else {
+            const pureHoursMatch = fullText.match(/Total Duty Time\s*[\r\n]*\s*(\d+(?:\.\d+)?)h/i);
+            if (pureHoursMatch) {
+                totalHours = parseFloat(pureHoursMatch[1]);
             }
         }
     }
@@ -133,7 +137,6 @@ async function fetchOldHoursMessages() {
 
         console.log("⏳ Syncing old duty hours messages...");
 
-        // قراءة آخر 500 رسالة في الروم وحساب أعلى عدد ساعات وصل له العسكري
         while (fetchedCount < 500) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
@@ -146,7 +149,6 @@ async function fetchOldHoursMessages() {
                 if (discordId && totalHours !== null) {
                     let cadet = cadetsData.find(c => c.discordId === discordId);
                     if (cadet) {
-                        // تحديث الساعات إلى القيمة الأخيرة/الأعلى المسجلة في الروم
                         if (totalHours > cadet.hours) {
                             cadet.hours = totalHours;
                         }
@@ -173,7 +175,6 @@ client.once('ready', async () => {
         cadetsData = [];
         members.forEach(m => syncMember(m));
 
-        // قراءة الساعات القديمة بعد مزامنة الأعضاء
         await fetchOldHoursMessages();
 
         io.emit("cadetsUpdate", cadetsData);
@@ -188,14 +189,14 @@ client.on('guildMemberUpdate', (oldM, newM) => {
 });
 
 client.on('messageCreate', msg => {
-    // استقبال تحديثات الساعات التلقائية من البوتات
+    // 1. استقبال تحديثات الساعات التلقائية
     if (msg.channel.id === HOURS_CHANNEL_ID) {
         const { discordId, totalHours } = parseDutyMessage(msg);
 
         if (discordId && totalHours !== null) {
             let cadet = cadetsData.find(c => c.discordId === discordId && c.status === 'active');
             if (cadet) {
-                cadet.hours = totalHours; // تحديث الساعات تلقائياً إلى الساعات الكلية الجديدة
+                cadet.hours = totalHours;
                 logs.unshift({
                     id: Date.now(),
                     by: 'Duty System',
@@ -209,8 +210,82 @@ client.on('messageCreate', msg => {
         }
     }
 
+    // 2. استقبال النقاط التلقائية من روم البوينت
+    if (msg.channel.id === POINTS_CHANNEL_ID) {
+        let fullText = msg.content || '';
+        if (msg.embeds && msg.embeds.length > 0) {
+            msg.embeds.forEach(e => {
+                fullText += ' ' + (e.title || '') + ' ' + (e.description || '');
+                if (e.fields) e.fields.forEach(f => fullText += ` ${f.name} ${f.value}`);
+            });
+        }
+
+        const pointsMatch = fullText.match(/Points\s*:\s*(\d+)/i) || fullText.match(/النقاط\s*:\s*(\d+)/i);
+        const pointsToAdd = pointsMatch ? parseInt(pointsMatch[1]) : 0;
+
+        const mentions = msg.mentions.users;
+        if (pointsToAdd > 0 && mentions.size > 0) {
+            mentions.forEach(user => {
+                let cadet = cadetsData.find(c => c.discordId === user.id && c.status === 'active');
+                if (cadet) {
+                    cadet.points = (cadet.points || 0) + pointsToAdd;
+                    logs.unshift({
+                        id: Date.now(),
+                        by: msg.author.username || 'Points Bot',
+                        action: `Added (${pointsToAdd}) points automatically`,
+                        target: cadet.name,
+                        time: new Date().toLocaleString('en-US')
+                    });
+                }
+            });
+            io.emit("cadetsUpdate", cadetsData);
+            io.emit("logsUpdate", logs);
+        }
+    }
+
+    // 3. استقبال تعيين الوينقات أوتوماتيكياً
+    if (msg.channel.id === WINGS_CHANNEL_ID) {
+        let fullText = msg.content || '';
+        if (msg.embeds && msg.embeds.length > 0) {
+            msg.embeds.forEach(e => {
+                fullText += ' ' + (e.title || '') + ' ' + (e.description || '');
+                if (e.fields) e.fields.forEach(f => fullText += ` ${f.name} ${f.value}`);
+            });
+        }
+
+        const mentions = msg.mentions.users;
+        if (mentions.size > 0) {
+            const matchedWing = ALL_WINGS.find(w => 
+                fullText.toLowerCase().includes(w.id.toLowerCase()) || 
+                fullText.toLowerCase().includes(w.name.toLowerCase())
+            );
+
+            if (matchedWing) {
+                mentions.forEach(user => {
+                    let cadet = cadetsData.find(c => c.discordId === user.id && c.status === 'active');
+                    if (cadet) {
+                        if (!cadet.wings) cadet.wings = [];
+                        if (!cadet.wings.includes(matchedWing.id)) {
+                            cadet.wings.push(matchedWing.id);
+                            logs.unshift({
+                                id: Date.now(),
+                                by: msg.author.username || 'Wing System',
+                                action: `Assigned wing (${matchedWing.name}) automatically`,
+                                target: cadet.name,
+                                time: new Date().toLocaleString('en-US')
+                            });
+                        }
+                    }
+                });
+                io.emit("cadetsUpdate", cadetsData);
+                io.emit("logsUpdate", logs);
+            }
+        }
+    }
+
     if (msg.author.bot) return;
 
+    // 4. استقبال التقارير التلقائية
     if (msg.channel.id === REPORTS_CHANNEL_ID) {
         let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
         if (!cadet) return;
