@@ -47,24 +47,26 @@ const client = new Client({
     ]
 });
 
-// دالة محسنة لمعالجة نصوص الـ Embeds واستخراج الساعات والدقائق والـ Discord ID
+// دالة شاملة لاستخراج النصوص كاملة من الرسالة سواء نص عادي أو Embed
+function getMessageFullText(message) {
+    let text = message.content || '';
+    if (message.embeds && message.embeds.length > 0) {
+        message.embeds.forEach(e => {
+            text += ' ' + (e.title || '') + ' ' + (e.description || '');
+            if (e.fields) e.fields.forEach(f => text += ` ${f.name} ${f.value}`);
+        });
+    }
+    return text;
+}
+
+// دالة استخراج بيانات ساعات الخدمة
 function parseDutyMessage(message) {
     let discordId = null;
     let totalHours = null;
 
-    let fullText = message.content || '';
-    if (message.embeds && message.embeds.length > 0) {
-        message.embeds.forEach(embed => {
-            fullText += ' ' + (embed.title || '') + ' ' + (embed.description || '');
-            if (embed.fields) {
-                embed.fields.forEach(f => {
-                    fullText += ` ${f.name} ${f.value}`;
-                });
-            }
-        });
-    }
+    const fullText = getMessageFullText(message);
 
-    // 1. استخراج Discord ID من المنشن أو الحقول النصية
+    // 1. استخراج Discord ID
     const mentionMatch = fullText.match(/<@!?(\d+)>/);
     if (mentionMatch) {
         discordId = mentionMatch[1];
@@ -73,7 +75,7 @@ function parseDutyMessage(message) {
         if (idMatch) discordId = idMatch[1] || idMatch[2];
     }
 
-    // 2. تجربة قراءة Total Minutes / Time In Server / Total Duty Time
+    // 2. قراءة الساعات والدقائق
     const minutesMatch = fullText.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i) || fullText.match(/Time In Server\s*[\r\n]*\s*(\d+)m/i);
     if (minutesMatch) {
         totalHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
@@ -126,7 +128,7 @@ function syncMember(member) {
     }
 }
 
-// دالة لجلب الرسائل القديمة من روم الساعات عند تشغيل البوت
+// دالة جلب كافة الرسائل القديمة من روم الساعات بدون حد 500 رسالة
 async function fetchOldHoursMessages() {
     try {
         const channel = await client.channels.fetch(HOURS_CHANNEL_ID);
@@ -134,10 +136,11 @@ async function fetchOldHoursMessages() {
 
         let lastId;
         let fetchedCount = 0;
+        const maxLimit = 10000; // جلب حتى 10 آلاف رسالة قديمة لتشغيل كافة الساعات القديمة
 
-        console.log("⏳ Syncing old duty hours messages...");
+        console.log("⏳ Syncing all old duty hours messages...");
 
-        while (fetchedCount < 500) {
+        while (fetchedCount < maxLimit) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
@@ -160,10 +163,90 @@ async function fetchOldHoursMessages() {
             fetchedCount += messages.size;
         }
 
-        console.log("✅ Sync completed successfully!");
+        console.log(`✅ Sync completed! Fetched ${fetchedCount} hours messages.`);
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old messages:", e);
+    }
+}
+
+// دالة جلب النقاط القديمة أيضاً
+async function fetchOldPointsMessages() {
+    try {
+        const channel = await client.channels.fetch(POINTS_CHANNEL_ID);
+        if (!channel) return;
+
+        let lastId;
+        let fetchedCount = 0;
+
+        console.log("⏳ Syncing old points messages...");
+
+        while (fetchedCount < 2000) {
+            const options = { limit: 100 };
+            if (lastId) options.before = lastId;
+
+            const messages = await channel.messages.fetch(options);
+            if (messages.size === 0) break;
+
+            messages.forEach(msg => {
+                processPointsMessage(msg, false);
+            });
+
+            lastId = messages.last().id;
+            fetchedCount += messages.size;
+        }
+
+        console.log("✅ Points sync completed!");
+        io.emit("cadetsUpdate", cadetsData);
+    } catch (e) {
+        console.error("Error fetching old points messages:", e);
+    }
+}
+
+// دالة معالجة إضافة النقاط
+function processPointsMessage(msg, emitUpdate = true) {
+    const fullText = getMessageFullText(msg);
+
+    const pointsMatch = fullText.match(/Points\s*:\s*(\d+)/i) || fullText.match(/النقاط\s*:\s*(\d+)/i);
+    if (!pointsMatch) return;
+
+    const pointsToAdd = parseInt(pointsMatch[1]);
+    if (isNaN(pointsToAdd) || pointsToAdd <= 0) return;
+
+    // استخراج جميع الـ Mentions والـ Discord IDs المذكورة في الرسالة
+    let targetUsers = new Set();
+
+    // 1. من خلال mentions الرسمية
+    if (msg.mentions && msg.mentions.users.size > 0) {
+        msg.mentions.users.forEach(u => targetUsers.add(u.id));
+    }
+
+    // 2. من خلال البحث عن أرقام المعرفات داخل النص مباشرة
+    const allIdMatches = fullText.matchAll(/<@!?(\d+)>/g);
+    for (const match of allIdMatches) {
+        targetUsers.add(match[1]);
+    }
+
+    // إضافة النقاط للضباط المحددين
+    targetUsers.forEach(userId => {
+        let cadet = cadetsData.find(c => c.discordId === userId && c.status === 'active');
+        if (cadet) {
+            cadet.points = (cadet.points || 0) + pointsToAdd;
+            if (emitUpdate) {
+                logs.unshift({
+                    id: Date.now(),
+                    by: msg.author.username || 'Points Bot',
+                    action: `Added (${pointsToAdd}) points automatically`,
+                    target: cadet.name,
+                    time: new Date().toLocaleString('en-US')
+                });
+            }
+        }
+    });
+
+    if (emitUpdate) {
+        io.emit("cadetsUpdate", cadetsData);
+        io.emit("logsUpdate", logs);
     }
 }
 
@@ -175,7 +258,9 @@ client.once('ready', async () => {
         cadetsData = [];
         members.forEach(m => syncMember(m));
 
+        // جلب الرسائل والنقاط القديمة
         await fetchOldHoursMessages();
+        await fetchOldPointsMessages();
 
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
@@ -210,59 +295,33 @@ client.on('messageCreate', msg => {
         }
     }
 
-    // 2. استقبال النقاط التلقائية من روم البوينت
+    // 2. استقبال النقاط التلقائية
     if (msg.channel.id === POINTS_CHANNEL_ID) {
-        let fullText = msg.content || '';
-        if (msg.embeds && msg.embeds.length > 0) {
-            msg.embeds.forEach(e => {
-                fullText += ' ' + (e.title || '') + ' ' + (e.description || '');
-                if (e.fields) e.fields.forEach(f => fullText += ` ${f.name} ${f.value}`);
-            });
-        }
-
-        const pointsMatch = fullText.match(/Points\s*:\s*(\d+)/i) || fullText.match(/النقاط\s*:\s*(\d+)/i);
-        const pointsToAdd = pointsMatch ? parseInt(pointsMatch[1]) : 0;
-
-        const mentions = msg.mentions.users;
-        if (pointsToAdd > 0 && mentions.size > 0) {
-            mentions.forEach(user => {
-                let cadet = cadetsData.find(c => c.discordId === user.id && c.status === 'active');
-                if (cadet) {
-                    cadet.points = (cadet.points || 0) + pointsToAdd;
-                    logs.unshift({
-                        id: Date.now(),
-                        by: msg.author.username || 'Points Bot',
-                        action: `Added (${pointsToAdd}) points automatically`,
-                        target: cadet.name,
-                        time: new Date().toLocaleString('en-US')
-                    });
-                }
-            });
-            io.emit("cadetsUpdate", cadetsData);
-            io.emit("logsUpdate", logs);
-        }
+        processPointsMessage(msg, true);
     }
 
     // 3. استقبال تعيين الوينقات أوتوماتيكياً
     if (msg.channel.id === WINGS_CHANNEL_ID) {
-        let fullText = msg.content || '';
-        if (msg.embeds && msg.embeds.length > 0) {
-            msg.embeds.forEach(e => {
-                fullText += ' ' + (e.title || '') + ' ' + (e.description || '');
-                if (e.fields) e.fields.forEach(f => fullText += ` ${f.name} ${f.value}`);
-            });
+        const fullText = getMessageFullText(msg);
+
+        let targetUsers = new Set();
+        if (msg.mentions && msg.mentions.users.size > 0) {
+            msg.mentions.users.forEach(u => targetUsers.add(u.id));
+        }
+        const allIdMatches = fullText.matchAll(/<@!?(\d+)>/g);
+        for (const match of allIdMatches) {
+            targetUsers.add(match[1]);
         }
 
-        const mentions = msg.mentions.users;
-        if (mentions.size > 0) {
+        if (targetUsers.size > 0) {
             const matchedWing = ALL_WINGS.find(w => 
                 fullText.toLowerCase().includes(w.id.toLowerCase()) || 
                 fullText.toLowerCase().includes(w.name.toLowerCase())
             );
 
             if (matchedWing) {
-                mentions.forEach(user => {
-                    let cadet = cadetsData.find(c => c.discordId === user.id && c.status === 'active');
+                targetUsers.forEach(userId => {
+                    let cadet = cadetsData.find(c => c.discordId === userId && c.status === 'active');
                     if (cadet) {
                         if (!cadet.wings) cadet.wings = [];
                         if (!cadet.wings.includes(matchedWing.id)) {
