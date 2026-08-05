@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
-const fs = require('fs');
+const axios = require('axios'); // تأكد من وجود axios في package.json
 
 const app = express();
 const server = http.createServer(app);
@@ -24,15 +24,71 @@ const HOURS_CHANNEL_ID = '1530564311217471639';
 const POINTS_CHANNEL_ID = '1523610705742266378';
 const WINGS_CHANNEL_ID = '1520527213597032558';
 
-// قائمة المعرفات الرئيسية للمسؤولين
 const ADMIN_IDS = ['771747917040058388'];
+const MASTER_PASSCODE = process.env.MASTER_PASSCODE || "SAW123456";
 
-// كود تسجيل الدخول السريع لصاحب الموقع (يمكنك تغييره إلى أي رمز تريده)
-const OWNER_PASSCODE = 'SAW2026';
+// إعدادات التخزين السحابي JSONBin
+const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY; // ضع المفتاح في Render Environment Variables
+const USERS_BIN_ID = process.env.USERS_BIN_ID;       // ID الخاص بحاوية المستخدمين
+const LOGS_BIN_ID = process.env.LOGS_BIN_ID;         // ID الخاص بحاوية السجلات
 
-let cadetsData = [];
 let users = [];
 let logs = [];
+let cadetsData = [];
+
+// دالة جلب البيانات من JSONBin عند بدء تشغيل السيرفر
+async function loadCloudData() {
+    if (!JSONBIN_API_KEY || !USERS_BIN_ID) {
+        console.log("⚠️ JSONBin Variables missing. Running with local memory.");
+        return;
+    }
+    try {
+        const resUsers = await axios.get(`https://api.jsonbin.io/v3/b/${USERS_BIN_ID}/latest`, {
+            headers: { 'X-Master-Key': JSONBIN_API_KEY }
+        });
+        users = resUsers.data.record || [];
+
+        if (LOGS_BIN_ID) {
+            const resLogs = await axios.get(`https://api.jsonbin.io/v3/b/${LOGS_BIN_ID}/latest`, {
+                headers: { 'X-Master-Key': JSONBIN_API_KEY }
+            });
+            logs = resLogs.data.record || [];
+        }
+        console.log(`✅ Loaded ${users.length} users and ${logs.length} logs from Cloud.`);
+    } catch (e) {
+        console.error("Error loading Cloud Data:", e.message);
+    }
+}
+
+// دالة حفظ المستخدمين في السحاب
+async function saveUsers() {
+    if (!JSONBIN_API_KEY || !USERS_BIN_ID) return;
+    try {
+        await axios.put(`https://api.jsonbin.io/v3/b/${USERS_BIN_ID}`, users, {
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Master-Key': JSONBIN_API_KEY 
+            }
+        });
+    } catch (e) {
+        console.error("Error saving users to cloud:", e.message);
+    }
+}
+
+// دالة حفظ السجلات في السحاب
+async function saveLogs() {
+    if (!JSONBIN_API_KEY || !LOGS_BIN_ID) return;
+    try {
+        await axios.put(`https://api.jsonbin.io/v3/b/${LOGS_BIN_ID}`, logs, {
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Master-Key': JSONBIN_API_KEY 
+            }
+        });
+    } catch (e) {
+        console.error("Error saving logs to cloud:", e.message);
+    }
+}
 
 const ALL_WINGS = [
     { id: "motorcycle", name: "MotorCycle Wing", icon: "fa-motorcycle" },
@@ -137,8 +193,6 @@ async function fetchOldHoursMessages() {
         let fetchedCount = 0;
         const maxLimit = 10000;
 
-        console.log("⏳ Syncing all old duty hours messages...");
-
         while (fetchedCount < maxLimit) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
@@ -162,7 +216,6 @@ async function fetchOldHoursMessages() {
             fetchedCount += messages.size;
         }
 
-        console.log(`✅ Sync completed! Fetched ${fetchedCount} hours messages.`);
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old messages:", e);
@@ -176,8 +229,6 @@ async function fetchOldPointsMessages() {
 
         let lastId;
         let fetchedCount = 0;
-
-        console.log("⏳ Syncing old points messages...");
 
         while (fetchedCount < 2000) {
             const options = { limit: 100 };
@@ -194,7 +245,6 @@ async function fetchOldPointsMessages() {
             fetchedCount += messages.size;
         }
 
-        console.log("✅ Points sync completed!");
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old points messages:", e);
@@ -233,6 +283,7 @@ function processPointsMessage(msg, emitUpdate = true) {
                     target: cadet.name,
                     time: new Date().toLocaleString('en-US')
                 });
+                saveLogs();
             }
         }
     });
@@ -245,6 +296,8 @@ function processPointsMessage(msg, emitUpdate = true) {
 
 client.once('ready', async () => {
     console.log(`🤖 Bot online as ${client.user.tag}`);
+    await loadCloudData(); // جلب كافة المستخدمين المحفوظين فور تشغيل البوت
+
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const members = await guild.members.fetch();
@@ -255,6 +308,7 @@ client.once('ready', async () => {
         await fetchOldPointsMessages();
 
         io.emit("cadetsUpdate", cadetsData);
+        io.emit("usersUpdate", users);
     } catch (e) {
         console.error("Sync error:", e);
     }
@@ -280,6 +334,7 @@ client.on('messageCreate', msg => {
                     target: cadet.name,
                     time: new Date().toLocaleString('en-US')
                 });
+                saveLogs();
                 io.emit("cadetsUpdate", cadetsData);
                 io.emit("logsUpdate", logs);
             }
@@ -322,6 +377,7 @@ client.on('messageCreate', msg => {
                                 target: cadet.name,
                                 time: new Date().toLocaleString('en-US')
                             });
+                            saveLogs();
                         }
                     }
                 });
@@ -350,6 +406,7 @@ client.on('messageCreate', msg => {
             target: cadet.name,
             time: new Date().toLocaleString('en-US')
         });
+        saveLogs();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("logsUpdate", logs);
     }
@@ -358,20 +415,15 @@ client.on('messageCreate', msg => {
 // API Routes
 app.get('/api/cadets', (req, res) => res.json(cadetsData));
 
-// حماية التعديل: التعديل مسموح فقط لمن يملك صلاحية admin
 app.post('/api/update-cadet', (req, res) => {
-    const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, userCopyId } = req.body;
+    const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, requesterId } = req.body;
     
-    // التحقق من أن منفذ الطلب يمتلك صلاحية التعديل
-    const editor = users.find(u => u.copyId === userCopyId);
-    const isOwner = ADMIN_IDS.includes(userCopyId);
-    
-    if (!isOwner && (!editor || editor.role !== 'admin' || !editor.approved)) {
-        return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل (عرض فقط)' });
+    const requester = users.find(u => u.copyId === requesterId);
+    if (!requester || !requester.approved || (requester.role !== 'admin' && requester.role !== 'editor')) {
+        return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل' });
     }
 
     let cadet = cadetsData.find(c => c.discordId === discordId);
-
     if (!cadet) return res.status(404).json({ success: false, message: 'Cadet not found' });
 
     let changes = [];
@@ -404,11 +456,12 @@ app.post('/api/update-cadet', (req, res) => {
     if (changes.length > 0) {
         logs.unshift({
             id: Date.now(),
-            by: editedBy || (editor ? editor.username : 'Admin'),
+            by: editedBy || requester.username || 'Admin',
             action: changes.join(' | '),
             target: cadet.name,
             time: new Date().toLocaleString('en-US')
         });
+        saveLogs();
     }
 
     io.emit("cadetsUpdate", cadetsData);
@@ -418,52 +471,53 @@ app.post('/api/update-cadet', (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json(logs));
 
-// 1. تسجيل الدخول ودعم كود Owner Passcode
 app.post('/api/login-request', (req, res) => {
-    const { username, copyId, passcode } = req.body;
+    const { username, copyId, secretCode } = req.body;
 
-    // هل الدخول باستخدام كود صاحب الموقع المباشر؟
-    const isOwnerPasscode = (passcode && passcode === OWNER_PASSCODE);
+    const isMaster = secretCode && secretCode === MASTER_PASSCODE;
     const isOwnerId = ADMIN_IDS.includes(copyId);
-    const isOwner = isOwnerPasscode || isOwnerId;
+    const isAdmin = isMaster || isOwnerId;
 
     let user = users.find(u => u.copyId === copyId);
 
     if (user) {
-        if (isOwner) {
+        if (isAdmin) {
             user.approved = true;
-            user.role = 'admin'; // صاحب الموقع له صلاحية تعديل كاملة
+            user.role = 'admin';
         }
-        user.username = username || user.username;
+        if (username) user.username = username;
         user.lastActive = Date.now();
         
+        saveUsers();
+
         return res.json({ 
             success: true, 
             approved: user.approved, 
+            isAdmin: user.role === 'admin',
             role: user.role || 'viewer',
-            isAdmin: isOwner || user.role === 'admin',
             user 
         });
     }
 
-    // مستخدم جديد
     const newUser = {
-        username: username || (isOwnerPasscode ? 'Owner' : 'User'),
-        copyId: copyId || `OWNER-${Date.now()}`,
-        approved: isOwner, // صاحب الموقع يتفعل تلقائياً، وغيره ينتظر الموافقة
-        role: isOwner ? 'admin' : 'viewer', // الافتراضي للمستخدم الجديد عرض فقط حتى يتم قبوله
+        username: username || (isMaster ? 'Owner' : 'User'),
+        copyId: copyId,
+        approved: isAdmin,
+        role: isAdmin ? 'admin' : 'viewer',
         status: 'active',
         lastActive: Date.now()
     };
     users.push(newUser);
+    saveUsers();
 
     logs.unshift({
         id: Date.now(),
         by: newUser.username,
-        action: isOwner ? 'Owner Auto Logged In' : 'New Login Request Pending',
+        action: isAdmin ? 'Owner/Admin Direct Login' : 'New Login Request (Pending Approval)',
         target: 'System',
         time: new Date().toLocaleString('en-US')
     });
+    saveLogs();
 
     io.emit("usersUpdate", users);
     io.emit("logsUpdate", logs);
@@ -471,42 +525,44 @@ app.post('/api/login-request', (req, res) => {
     res.json({ 
         success: true, 
         approved: newUser.approved, 
+        isAdmin: newUser.role === 'admin', 
         role: newUser.role,
-        isAdmin: isOwner, 
         user: newUser 
     });
 });
 
-// 2. قبول / رفض / تعديل صلاحية المستخدم (Admin أو Viewer)
 app.post('/api/approve-user', (req, res) => {
-    const { copyId, approve, role, adminName } = req.body;
+    const { copyId, approve, adminName, role } = req.body;
     let user = users.find(u => u.copyId === copyId);
 
     if (user) {
         user.approved = approve;
-        if (role) user.role = role; // تحديد الصلاحية: 'admin' (تعديل) أو 'viewer' (مشاهدة)
+        if (role) user.role = role;
+        
+        saveUsers();
 
         logs.unshift({
             id: Date.now(),
             by: adminName || 'Admin',
-            action: approve ? `Approved user access (${user.role || 'viewer'})` : 'Revoked user access',
+            action: approve ? `User Approved as (${user.role})` : 'User Access Revoked',
             target: user.username,
             time: new Date().toLocaleString('en-US')
         });
+        saveLogs();
+
         io.emit("usersUpdate", users);
         io.emit("logsUpdate", logs);
         res.json({ success: true });
     } else {
-        res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false });
     }
 });
 
-// 3. حذف أي مستخدم من النظام وسحب صلاحيته
 app.post('/api/delete-user', (req, res) => {
     const { copyId, adminName } = req.body;
-
+    
     if (ADMIN_IDS.includes(copyId)) {
-        return res.status(403).json({ success: false, message: 'لا يمكنك حذف صاحب الموقع الرئيسي' });
+        return res.status(403).json({ success: false, message: 'لا يمكنك حذف المالك الرئيسي' });
     }
 
     const index = users.findIndex(u => u.copyId === copyId);
@@ -514,21 +570,48 @@ app.post('/api/delete-user', (req, res) => {
     if (index !== -1) {
         const deletedUser = users[index];
         users.splice(index, 1);
+        saveUsers();
 
         logs.unshift({
             id: Date.now(),
             by: adminName || 'Admin',
-            action: `Deleted Access & Account (${deletedUser.username})`,
+            action: `Deleted Access (${deletedUser.username})`,
             target: deletedUser.username,
             time: new Date().toLocaleString('en-US')
         });
+        saveLogs();
 
         io.emit("usersUpdate", users);
         io.emit("logsUpdate", logs);
 
         res.json({ success: true });
     } else {
-        res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'المستخدم غير موجود' });
+    }
+});
+
+app.post('/api/update-user-role', (req, res) => {
+    const { copyId, newRole, adminName } = req.body;
+    
+    let user = users.find(u => u.copyId === copyId);
+    if (user) {
+        user.role = newRole;
+        saveUsers();
+
+        logs.unshift({
+            id: Date.now(),
+            by: adminName || 'Admin',
+            action: `Changed role of ${user.username} to (${newRole})`,
+            target: user.username,
+            time: new Date().toLocaleString('en-US')
+        });
+        saveLogs();
+
+        io.emit("usersUpdate", users);
+        io.emit("logsUpdate", logs);
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ success: false, message: 'المستخدم غير موجود' });
     }
 });
 
