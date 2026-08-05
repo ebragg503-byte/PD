@@ -24,7 +24,11 @@ const HOURS_CHANNEL_ID = '1530564311217471639';
 const POINTS_CHANNEL_ID = '1523610705742266378';
 const WINGS_CHANNEL_ID = '1520527213597032558';
 
+// قائمة المعرفات الرئيسية للمسؤولين
 const ADMIN_IDS = ['771747917040058388'];
+
+// كود تسجيل الدخول السريع لصاحب الموقع (يمكنك تغييره إلى أي رمز تريده)
+const OWNER_PASSCODE = 'SAW2026';
 
 let cadetsData = [];
 let users = [];
@@ -47,7 +51,6 @@ const client = new Client({
     ]
 });
 
-// دالة شاملة لاستخراج النصوص كاملة من الرسالة سواء نص عادي أو Embed
 function getMessageFullText(message) {
     let text = message.content || '';
     if (message.embeds && message.embeds.length > 0) {
@@ -59,14 +62,12 @@ function getMessageFullText(message) {
     return text;
 }
 
-// دالة استخراج بيانات ساعات الخدمة
 function parseDutyMessage(message) {
     let discordId = null;
     let totalHours = null;
 
     const fullText = getMessageFullText(message);
 
-    // 1. استخراج Discord ID
     const mentionMatch = fullText.match(/<@!?(\d+)>/);
     if (mentionMatch) {
         discordId = mentionMatch[1];
@@ -75,7 +76,6 @@ function parseDutyMessage(message) {
         if (idMatch) discordId = idMatch[1] || idMatch[2];
     }
 
-    // 2. قراءة الساعات والدقائق
     const minutesMatch = fullText.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i) || fullText.match(/Time In Server\s*[\r\n]*\s*(\d+)m/i);
     if (minutesMatch) {
         totalHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
@@ -128,7 +128,6 @@ function syncMember(member) {
     }
 }
 
-// دالة جلب كافة الرسائل القديمة من روم الساعات بدون حد 500 رسالة
 async function fetchOldHoursMessages() {
     try {
         const channel = await client.channels.fetch(HOURS_CHANNEL_ID);
@@ -136,7 +135,7 @@ async function fetchOldHoursMessages() {
 
         let lastId;
         let fetchedCount = 0;
-        const maxLimit = 10000; // جلب حتى 10 آلاف رسالة قديمة لتشغيل كافة الساعات القديمة
+        const maxLimit = 10000;
 
         console.log("⏳ Syncing all old duty hours messages...");
 
@@ -170,7 +169,6 @@ async function fetchOldHoursMessages() {
     }
 }
 
-// دالة جلب النقاط القديمة أيضاً
 async function fetchOldPointsMessages() {
     try {
         const channel = await client.channels.fetch(POINTS_CHANNEL_ID);
@@ -203,7 +201,6 @@ async function fetchOldPointsMessages() {
     }
 }
 
-// دالة معالجة إضافة النقاط
 function processPointsMessage(msg, emitUpdate = true) {
     const fullText = getMessageFullText(msg);
 
@@ -213,21 +210,17 @@ function processPointsMessage(msg, emitUpdate = true) {
     const pointsToAdd = parseInt(pointsMatch[1]);
     if (isNaN(pointsToAdd) || pointsToAdd <= 0) return;
 
-    // استخراج جميع الـ Mentions والـ Discord IDs المذكورة في الرسالة
     let targetUsers = new Set();
 
-    // 1. من خلال mentions الرسمية
     if (msg.mentions && msg.mentions.users.size > 0) {
         msg.mentions.users.forEach(u => targetUsers.add(u.id));
     }
 
-    // 2. من خلال البحث عن أرقام المعرفات داخل النص مباشرة
     const allIdMatches = fullText.matchAll(/<@!?(\d+)>/g);
     for (const match of allIdMatches) {
         targetUsers.add(match[1]);
     }
 
-    // إضافة النقاط للضباط المحددين
     targetUsers.forEach(userId => {
         let cadet = cadetsData.find(c => c.discordId === userId && c.status === 'active');
         if (cadet) {
@@ -258,7 +251,6 @@ client.once('ready', async () => {
         cadetsData = [];
         members.forEach(m => syncMember(m));
 
-        // جلب الرسائل والنقاط القديمة
         await fetchOldHoursMessages();
         await fetchOldPointsMessages();
 
@@ -274,7 +266,6 @@ client.on('guildMemberUpdate', (oldM, newM) => {
 });
 
 client.on('messageCreate', msg => {
-    // 1. استقبال تحديثات الساعات التلقائية
     if (msg.channel.id === HOURS_CHANNEL_ID) {
         const { discordId, totalHours } = parseDutyMessage(msg);
 
@@ -295,12 +286,10 @@ client.on('messageCreate', msg => {
         }
     }
 
-    // 2. استقبال النقاط التلقائية
     if (msg.channel.id === POINTS_CHANNEL_ID) {
         processPointsMessage(msg, true);
     }
 
-    // 3. استقبال تعيين الوينقات أوتوماتيكياً
     if (msg.channel.id === WINGS_CHANNEL_ID) {
         const fullText = getMessageFullText(msg);
 
@@ -344,7 +333,6 @@ client.on('messageCreate', msg => {
 
     if (msg.author.bot) return;
 
-    // 4. استقبال التقارير التلقائية
     if (msg.channel.id === REPORTS_CHANNEL_ID) {
         let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
         if (!cadet) return;
@@ -370,8 +358,18 @@ client.on('messageCreate', msg => {
 // API Routes
 app.get('/api/cadets', (req, res) => res.json(cadetsData));
 
+// حماية التعديل: التعديل مسموح فقط لمن يملك صلاحية admin
 app.post('/api/update-cadet', (req, res) => {
-    const { discordId, hours, points, reportTitle, reportContent, wings, editedBy } = req.body;
+    const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, userCopyId } = req.body;
+    
+    // التحقق من أن منفذ الطلب يمتلك صلاحية التعديل
+    const editor = users.find(u => u.copyId === userCopyId);
+    const isOwner = ADMIN_IDS.includes(userCopyId);
+    
+    if (!isOwner && (!editor || editor.role !== 'admin' || !editor.approved)) {
+        return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل (عرض فقط)' });
+    }
+
     let cadet = cadetsData.find(c => c.discordId === discordId);
 
     if (!cadet) return res.status(404).json({ success: false, message: 'Cadet not found' });
@@ -406,7 +404,7 @@ app.post('/api/update-cadet', (req, res) => {
     if (changes.length > 0) {
         logs.unshift({
             id: Date.now(),
-            by: editedBy || 'Admin',
+            by: editedBy || (editor ? editor.username : 'Admin'),
             action: changes.join(' | '),
             target: cadet.name,
             time: new Date().toLocaleString('en-US')
@@ -420,29 +418,40 @@ app.post('/api/update-cadet', (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json(logs));
 
+// 1. تسجيل الدخول ودعم كود Owner Passcode
 app.post('/api/login-request', (req, res) => {
-    const { username, copyId } = req.body;
+    const { username, copyId, passcode } = req.body;
+
+    // هل الدخول باستخدام كود صاحب الموقع المباشر؟
+    const isOwnerPasscode = (passcode && passcode === OWNER_PASSCODE);
+    const isOwnerId = ADMIN_IDS.includes(copyId);
+    const isOwner = isOwnerPasscode || isOwnerId;
+
     let user = users.find(u => u.copyId === copyId);
 
-    const isAdmin = ADMIN_IDS.includes(copyId);
-
     if (user) {
-        if (isAdmin) user.approved = true;
+        if (isOwner) {
+            user.approved = true;
+            user.role = 'admin'; // صاحب الموقع له صلاحية تعديل كاملة
+        }
         user.username = username || user.username;
         user.lastActive = Date.now();
         
         return res.json({ 
             success: true, 
             approved: user.approved, 
-            isAdmin: isAdmin,
+            role: user.role || 'viewer',
+            isAdmin: isOwner || user.role === 'admin',
             user 
         });
     }
 
+    // مستخدم جديد
     const newUser = {
-        username,
-        copyId,
-        approved: isAdmin,
+        username: username || (isOwnerPasscode ? 'Owner' : 'User'),
+        copyId: copyId || `OWNER-${Date.now()}`,
+        approved: isOwner, // صاحب الموقع يتفعل تلقائياً، وغيره ينتظر الموافقة
+        role: isOwner ? 'admin' : 'viewer', // الافتراضي للمستخدم الجديد عرض فقط حتى يتم قبوله
         status: 'active',
         lastActive: Date.now()
     };
@@ -450,8 +459,8 @@ app.post('/api/login-request', (req, res) => {
 
     logs.unshift({
         id: Date.now(),
-        by: username,
-        action: isAdmin ? 'Admin Auto Logged In' : 'New Login Request',
+        by: newUser.username,
+        action: isOwner ? 'Owner Auto Logged In' : 'New Login Request Pending',
         target: 'System',
         time: new Date().toLocaleString('en-US')
     });
@@ -462,21 +471,25 @@ app.post('/api/login-request', (req, res) => {
     res.json({ 
         success: true, 
         approved: newUser.approved, 
-        isAdmin: isAdmin, 
+        role: newUser.role,
+        isAdmin: isOwner, 
         user: newUser 
     });
 });
 
+// 2. قبول / رفض / تعديل صلاحية المستخدم (Admin أو Viewer)
 app.post('/api/approve-user', (req, res) => {
-    const { copyId, approve, adminName } = req.body;
+    const { copyId, approve, role, adminName } = req.body;
     let user = users.find(u => u.copyId === copyId);
 
     if (user) {
         user.approved = approve;
+        if (role) user.role = role; // تحديد الصلاحية: 'admin' (تعديل) أو 'viewer' (مشاهدة)
+
         logs.unshift({
             id: Date.now(),
             by: adminName || 'Admin',
-            action: approve ? 'User Access Approved' : 'User Access Revoked',
+            action: approve ? `Approved user access (${user.role || 'viewer'})` : 'Revoked user access',
             target: user.username,
             time: new Date().toLocaleString('en-US')
         });
@@ -484,7 +497,38 @@ app.post('/api/approve-user', (req, res) => {
         io.emit("logsUpdate", logs);
         res.json({ success: true });
     } else {
-        res.status(404).json({ success: false });
+        res.status(404).json({ success: false, message: 'User not found' });
+    }
+});
+
+// 3. حذف أي مستخدم من النظام وسحب صلاحيته
+app.post('/api/delete-user', (req, res) => {
+    const { copyId, adminName } = req.body;
+
+    if (ADMIN_IDS.includes(copyId)) {
+        return res.status(403).json({ success: false, message: 'لا يمكنك حذف صاحب الموقع الرئيسي' });
+    }
+
+    const index = users.findIndex(u => u.copyId === copyId);
+
+    if (index !== -1) {
+        const deletedUser = users[index];
+        users.splice(index, 1);
+
+        logs.unshift({
+            id: Date.now(),
+            by: adminName || 'Admin',
+            action: `Deleted Access & Account (${deletedUser.username})`,
+            target: deletedUser.username,
+            time: new Date().toLocaleString('en-US')
+        });
+
+        io.emit("usersUpdate", users);
+        io.emit("logsUpdate", logs);
+
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ success: false, message: 'User not found' });
     }
 });
 
