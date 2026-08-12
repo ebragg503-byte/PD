@@ -3,7 +3,8 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
-const axios = require('axios'); // تأكد من وجود axios في package.json
+const axios = require('axios');
+const fs = require('fs'); // تم إضافة مكتبة fs لمنع الكراش
 
 const app = express();
 const server = http.createServer(app);
@@ -28,9 +29,9 @@ const ADMIN_IDS = ['771747917040058388'];
 const MASTER_PASSCODE = process.env.MASTER_PASSCODE || "SAW123456";
 
 // إعدادات التخزين السحابي JSONBin
-const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY; // ضع المفتاح في Render Environment Variables
-const USERS_BIN_ID = process.env.USERS_BIN_ID;       // ID الخاص بحاوية المستخدمين
-const LOGS_BIN_ID = process.env.LOGS_BIN_ID;         // ID الخاص بحاوية السجلات
+const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
+const USERS_BIN_ID = process.env.USERS_BIN_ID;
+const LOGS_BIN_ID = process.env.LOGS_BIN_ID;
 
 let users = [];
 let logs = [];
@@ -296,7 +297,7 @@ function processPointsMessage(msg, emitUpdate = true) {
 
 client.once('ready', async () => {
     console.log(`🤖 Bot online as ${client.user.tag}`);
-    await loadCloudData(); // جلب كافة المستخدمين المحفوظين فور تشغيل البوت
+    await loadCloudData();
 
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
@@ -418,7 +419,7 @@ app.get('/api/cadets', (req, res) => res.json(cadetsData));
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, requesterId } = req.body;
     
-    const requester = users.find(u => u.copyId === requesterId);
+    const requester = users.find(u => u.copyId === requesterId?.trim());
     if (!requester || !requester.approved || (requester.role !== 'admin' && requester.role !== 'editor')) {
         return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل' });
     }
@@ -474,11 +475,12 @@ app.get('/api/logs', (req, res) => res.json(logs));
 app.post('/api/login-request', (req, res) => {
     const { username, copyId, secretCode } = req.body;
 
-    const isMaster = secretCode && secretCode === MASTER_PASSCODE;
-    const isOwnerId = ADMIN_IDS.includes(copyId);
+    const cleanCopyId = copyId ? copyId.trim() : '';
+    const isMaster = secretCode && secretCode.trim() === MASTER_PASSCODE;
+    const isOwnerId = ADMIN_IDS.includes(cleanCopyId);
     const isAdmin = isMaster || isOwnerId;
 
-    let user = users.find(u => u.copyId === copyId);
+    let user = users.find(u => u.copyId === cleanCopyId);
 
     if (user) {
         if (isAdmin) {
@@ -500,8 +502,8 @@ app.post('/api/login-request', (req, res) => {
     }
 
     const newUser = {
-        username: username || (isMaster ? 'Owner' : 'User'),
-        copyId: copyId,
+        username: username || (isAdmin ? 'Owner' : 'User'),
+        copyId: cleanCopyId,
         approved: isAdmin,
         role: isAdmin ? 'admin' : 'viewer',
         status: 'active',
@@ -533,7 +535,7 @@ app.post('/api/login-request', (req, res) => {
 
 app.post('/api/approve-user', (req, res) => {
     const { copyId, approve, adminName, role } = req.body;
-    let user = users.find(u => u.copyId === copyId);
+    let user = users.find(u => u.copyId === copyId?.trim());
 
     if (user) {
         user.approved = approve;
@@ -560,12 +562,13 @@ app.post('/api/approve-user', (req, res) => {
 
 app.post('/api/delete-user', (req, res) => {
     const { copyId, adminName } = req.body;
+    const cleanId = copyId ? copyId.trim() : '';
     
-    if (ADMIN_IDS.includes(copyId)) {
+    if (ADMIN_IDS.includes(cleanId)) {
         return res.status(403).json({ success: false, message: 'لا يمكنك حذف المالك الرئيسي' });
     }
 
-    const index = users.findIndex(u => u.copyId === copyId);
+    const index = users.findIndex(u => u.copyId === cleanId);
 
     if (index !== -1) {
         const deletedUser = users[index];
@@ -593,7 +596,7 @@ app.post('/api/delete-user', (req, res) => {
 app.post('/api/update-user-role', (req, res) => {
     const { copyId, newRole, adminName } = req.body;
     
-    let user = users.find(u => u.copyId === copyId);
+    let user = users.find(u => u.copyId === copyId?.trim());
     if (user) {
         user.role = newRole;
         saveUsers();
@@ -617,7 +620,7 @@ app.post('/api/update-user-role', (req, res) => {
 
 app.post('/api/user-heartbeat', (req, res) => {
     const { copyId, status } = req.body;
-    let user = users.find(u => u.copyId === copyId);
+    let user = users.find(u => u.copyId === copyId?.trim());
     if (user) {
         user.status = status;
         user.lastActive = Date.now();
