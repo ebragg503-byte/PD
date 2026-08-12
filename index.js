@@ -4,7 +4,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const axios = require('axios');
-const fs = require('fs'); // تم إضافة مكتبة fs لمنع الكراش
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,7 +37,7 @@ let users = [];
 let logs = [];
 let cadetsData = [];
 
-// دالة جلب البيانات من JSONBin عند بدء تشغيل السيرفر
+// دالة جلب البيانات من JSONBin مع الحماية من قيم undefined
 async function loadCloudData() {
     if (!JSONBIN_API_KEY || !USERS_BIN_ID) {
         console.log("⚠️ JSONBin Variables missing. Running with local memory.");
@@ -47,17 +47,22 @@ async function loadCloudData() {
         const resUsers = await axios.get(`https://api.jsonbin.io/v3/b/${USERS_BIN_ID}/latest`, {
             headers: { 'X-Master-Key': JSONBIN_API_KEY }
         });
-        users = resUsers.data.record || [];
+        
+        const fetchedUsers = resUsers.data.record;
+        users = Array.isArray(fetchedUsers) ? fetchedUsers : [];
 
         if (LOGS_BIN_ID) {
             const resLogs = await axios.get(`https://api.jsonbin.io/v3/b/${LOGS_BIN_ID}/latest`, {
                 headers: { 'X-Master-Key': JSONBIN_API_KEY }
             });
-            logs = resLogs.data.record || [];
+            const fetchedLogs = resLogs.data.record;
+            logs = Array.isArray(fetchedLogs) ? fetchedLogs : [];
         }
         console.log(`✅ Loaded ${users.length} users and ${logs.length} logs from Cloud.`);
     } catch (e) {
         console.error("Error loading Cloud Data:", e.message);
+        users = [];
+        logs = [];
     }
 }
 
@@ -305,11 +310,13 @@ client.once('ready', async () => {
         cadetsData = [];
         members.forEach(m => syncMember(m));
 
-        await fetchOldHoursMessages();
-        await fetchOldPointsMessages();
-
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
+
+        // جلب الرسائل القديمة في الخلفية لتفادي الـ Block
+        fetchOldHoursMessages();
+        fetchOldPointsMessages();
+
     } catch (e) {
         console.error("Sync error:", e);
     }
@@ -419,6 +426,7 @@ app.get('/api/cadets', (req, res) => res.json(cadetsData));
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, requesterId } = req.body;
     
+    if (!Array.isArray(users)) users = [];
     const requester = users.find(u => u.copyId === requesterId?.trim());
     if (!requester || !requester.approved || (requester.role !== 'admin' && requester.role !== 'editor')) {
         return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل' });
@@ -474,6 +482,8 @@ app.get('/api/logs', (req, res) => res.json(logs));
 
 app.post('/api/login-request', (req, res) => {
     const { username, copyId, secretCode } = req.body;
+
+    if (!Array.isArray(users)) users = [];
 
     const cleanCopyId = copyId ? copyId.trim() : '';
     const isMaster = secretCode && secretCode.trim() === MASTER_PASSCODE;
@@ -535,6 +545,7 @@ app.post('/api/login-request', (req, res) => {
 
 app.post('/api/approve-user', (req, res) => {
     const { copyId, approve, adminName, role } = req.body;
+    if (!Array.isArray(users)) users = [];
     let user = users.find(u => u.copyId === copyId?.trim());
 
     if (user) {
@@ -568,6 +579,7 @@ app.post('/api/delete-user', (req, res) => {
         return res.status(403).json({ success: false, message: 'لا يمكنك حذف المالك الرئيسي' });
     }
 
+    if (!Array.isArray(users)) users = [];
     const index = users.findIndex(u => u.copyId === cleanId);
 
     if (index !== -1) {
@@ -596,6 +608,7 @@ app.post('/api/delete-user', (req, res) => {
 app.post('/api/update-user-role', (req, res) => {
     const { copyId, newRole, adminName } = req.body;
     
+    if (!Array.isArray(users)) users = [];
     let user = users.find(u => u.copyId === copyId?.trim());
     if (user) {
         user.role = newRole;
@@ -620,6 +633,7 @@ app.post('/api/update-user-role', (req, res) => {
 
 app.post('/api/user-heartbeat', (req, res) => {
     const { copyId, status } = req.body;
+    if (!Array.isArray(users)) users = [];
     let user = users.find(u => u.copyId === copyId?.trim());
     if (user) {
         user.status = status;
@@ -629,18 +643,21 @@ app.post('/api/user-heartbeat', (req, res) => {
     res.json({ success: true });
 });
 
-app.get('/api/users', (req, res) => res.json(users));
+app.get('/api/users', (req, res) => res.json(Array.isArray(users) ? users : []));
 app.get('/api/wings-list', (req, res) => res.json(ALL_WINGS));
 
+// التعديل الهام هنا لحماية السيرفر من الكراش
 setInterval(() => {
     const now = Date.now();
     let updated = false;
-    users.forEach(u => {
-        if (u.status !== 'no-active' && (now - u.lastActive > 30000)) {
-            u.status = 'no-active';
-            updated = true;
-        }
-    });
+    if (Array.isArray(users)) {
+        users.forEach(u => {
+            if (u && u.status !== 'no-active' && (now - u.lastActive > 30000)) {
+                u.status = 'no-active';
+                updated = true;
+            }
+        });
+    }
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
