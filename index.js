@@ -244,6 +244,12 @@ async function fetchOldHoursMessages() {
             return;
         }
 
+        // إعادة تصفير الساعات والرسائل المعالجة لتجنب التكرار والتراكم الخاطئ
+        cadetsData.forEach(c => {
+            c.hours = 0;
+            c.processedHoursMsgIds = [];
+        });
+
         let lastId;
         let fetchedCount = 0;
 
@@ -263,7 +269,6 @@ async function fetchOldHoursMessages() {
                 if (discordId && addedHours > 0) {
                     let cadet = cadetsData.find(c => c.discordId === discordId);
                     if (cadet) {
-                        if (!cadet.processedHoursMsgIds) cadet.processedHoursMsgIds = [];
                         if (!cadet.processedHoursMsgIds.includes(msg.id)) {
                             cadet.hours = parseFloat((cadet.hours + addedHours).toFixed(2));
                             cadet.processedHoursMsgIds.push(msg.id);
@@ -274,10 +279,10 @@ async function fetchOldHoursMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
-            await delay(200); // تجنب Rate Limit
+            await delay(250); // تجنب Rate Limit
         }
 
-        console.log("✅ تم حساب الساعات التراكمية للجميع.");
+        console.log("✅ تم حساب الساعات التراكمية للجميع بنجاح.");
         saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
@@ -290,43 +295,11 @@ function processReportMessage(msg, emitUpdate = true) {
     const fullText = getMessageFullText(msg);
     if (!fullText.trim()) return;
 
-    let targetCadet = null;
+    // 1. ربط التقرير بكاتب الرسالة فقط لمنع احتسابه لأشخاص منشنتهم بالتقرير
+    if (!msg.author || msg.author.bot) return;
 
-    if (msg.author && !msg.author.bot) {
-        targetCadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
-    }
-
-    if (!targetCadet) {
-        const allMentions = [...fullText.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-        if (allMentions.length > 0) {
-            for (const id of allMentions) {
-                const found = cadetsData.find(c => c.discordId === id && c.status === 'active');
-                if (found) {
-                    targetCadet = found;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (!targetCadet) {
-        targetCadet = cadetsData.find(c => {
-            if (c.status !== 'active') return false;
-            
-            const cadetNum = (c.name.match(/\d+/) || [])[0];
-            if (cadetNum && fullText.includes(cadetNum)) {
-                return true;
-            }
-
-            const cleanName = c.name.replace(/[^a-zA-Z0-9\s]/g, '').trim();
-            if (cleanName.length > 2 && fullText.toLowerCase().includes(cleanName.toLowerCase())) {
-                return true;
-            }
-
-            return false;
-        });
-    }
-
+    const targetCadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
+    
     if (!targetCadet) return;
 
     const caseNameMatch = fullText.match(/Case Name\s*:\s*([^\n\r]+)/i) || fullText.match(/Title\s*:\s*([^\n\r]+)/i);
@@ -334,6 +307,7 @@ function processReportMessage(msg, emitUpdate = true) {
 
     if (!targetCadet.reports) targetCadet.reports = [];
 
+    // منع تكرار احتساب نفس التقرير
     if (!targetCadet.reports.some(r => r.id === msg.id)) {
         targetCadet.reports.push({
             id: msg.id,
@@ -370,6 +344,11 @@ async function fetchOldReportsMessages() {
             return;
         }
 
+        // تفريغ التقارير القديمة لإعادة الفحص المباشر لكاتب الرسالة فقط
+        cadetsData.forEach(c => {
+            c.reports = [];
+        });
+
         let lastId;
         let fetchedCount = 0;
 
@@ -390,7 +369,7 @@ async function fetchOldReportsMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
-            await delay(200);
+            await delay(250);
         }
 
         console.log("✅ تم استخراج وحساب تقارير MDT بنجاح.");
