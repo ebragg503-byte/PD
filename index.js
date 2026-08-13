@@ -177,7 +177,7 @@ function parseDutyMessage(message) {
 
     const fullText = getMessageFullText(message);
 
-    // 1. استخراج الـ Discord ID إن وجد
+    // 1. استخراج الـ Discord ID
     const idMatches = [...fullText.matchAll(/<@!?(\d+)>|(\d{17,19})/g)];
     if (idMatches.length > 0) {
         const discordFieldMatch = fullText.match(/Discord\s*[:|-]?\s*<@!?(\d+)>|Discord\s*[:|-]?\s*(\d{17,19})/i);
@@ -188,19 +188,19 @@ function parseDutyMessage(message) {
         }
     }
 
-    // 2. استخراج الكولساين / Server ID (مثل 403)
+    // 2. استخراج الكولساين / Server ID
     const callsignMatch = fullText.match(/Server ID\s*:\s*(\d+)/i) || fullText.match(/Callsign\s*:\s*(\d+)/i);
     if (callsignMatch) {
         callsign = callsignMatch[1];
     }
 
-    // 3. استخراج اسم الشخصية (مثل Ali Nono)
+    // 3. استخراج اسم الشخصية
     const nameMatch = fullText.match(/Character Name\s*:\s*([^\n\r]+)/i);
     if (nameMatch) {
         charName = nameMatch[1].trim();
     }
 
-    // 4. استخراج إجمالي الساعات/الدقائق التراكمية من الرسالة
+    // 4. استخراج إجمالي الساعات/الدقائق
     const totalMinsMatch = fullText.match(/Total Minutes\s*[:|-]?\s*(\d+)/i);
     if (totalMinsMatch) {
         totalHours = parseFloat((parseInt(totalMinsMatch[1]) / 60).toFixed(2));
@@ -257,7 +257,6 @@ async function fetchOldHoursMessages() {
             return;
         }
 
-        // تصفير الساعات لبدء الإحصاء الدقيق
         cadetsData.forEach(c => {
             c.hours = 0;
             c.processedHoursMsgIds = [];
@@ -603,31 +602,41 @@ app.get('/api/cadets', (req, res) => {
     res.json(cadetsData);
 });
 
+// مسار تعديل بيانات العسكري المحدث
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, requesterId } = req.body;
     
+    let cadet = cadetsData.find(c => c.discordId === discordId);
+    if (!cadet) {
+        return res.status(404).json({ success: false, message: 'العسكري غير موجود' });
+    }
+
     if (!Array.isArray(users)) users = [];
-    const requester = users.find(u => u.copyId === requesterId?.trim());
-    if (!requester || !requester.approved || (requester.role !== 'admin' && requester.role !== 'editor')) {
+    const cleanRequesterId = requesterId ? requesterId.trim() : '';
+    const requester = users.find(u => u.copyId === cleanRequesterId);
+    
+    const isMainAdmin = ADMIN_IDS.includes(cleanRequesterId);
+    const hasPermission = isMainAdmin || (requester && requester.approved && (requester.role === 'admin' || requester.role === 'editor'));
+
+    if (!hasPermission) {
         return res.status(403).json({ success: false, message: 'ليس لديك صلاحية التعديل' });
     }
 
-    let cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return res.status(404).json({ success: false, message: 'Cadet not found' });
-
     let changes = [];
 
-    if (hours !== undefined && hours !== '') {
-        changes.push(`Updated hours to (${hours})`);
-        cadet.hours = parseFloat(hours);
+    if (hours !== undefined && hours !== '' && !isNaN(hours)) {
+        const newHours = parseFloat(hours);
+        changes.push(`Updated hours to (${newHours})`);
+        cadet.hours = newHours;
     }
 
-    if (points !== undefined && points !== '') {
-        changes.push(`Updated points to (${points})`);
-        cadet.points = parseInt(points);
+    if (points !== undefined && points !== '' && !isNaN(points)) {
+        const newPoints = parseInt(points);
+        changes.push(`Updated points to (${newPoints})`);
+        cadet.points = newPoints;
     }
 
-    if (wings !== undefined) {
+    if (wings !== undefined && Array.isArray(wings)) {
         cadet.wings = wings;
         changes.push(`Updated wings`);
     }
@@ -636,29 +645,32 @@ app.post('/api/update-cadet', (req, res) => {
         if (!cadet.reports) cadet.reports = [];
         cadet.reports.push({
             id: Date.now().toString(),
-            title: reportTitle || 'Manual Report',
+            title: reportTitle || 'تقرير يدوي',
             content: reportContent || '-',
             date: new Date().toLocaleDateString('en-US')
         });
-        changes.push(`Added manual report`);
+        changes.push(`Added manual report: ${reportTitle || 'تقرير يدوي'}`);
     }
 
     if (changes.length > 0) {
         logs.unshift({
             id: Date.now(),
-            by: editedBy || requester.username || 'Admin',
+            by: editedBy || (requester ? requester.username : 'Admin'),
             action: changes.join(' | '),
             target: cadet.name,
             time: new Date().toLocaleString('en-US')
         });
+        
         saveLogs();
         saveCadets();
+        sortCadets();
+
+        // بث مباشر للجدول ليتحدث في جميع المتصفحات فوراً
+        io.emit("cadetsUpdate", cadetsData);
+        io.emit("logsUpdate", logs);
     }
 
-    sortCadets();
-    io.emit("cadetsUpdate", cadetsData);
-    io.emit("logsUpdate", logs);
-    res.json({ success: true });
+    return res.json({ success: true, message: 'تم حفظ التغييرات بنجاح', cadet });
 });
 
 app.get('/api/logs', (req, res) => res.json(logs));
