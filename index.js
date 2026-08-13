@@ -20,7 +20,7 @@ const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
-// تم تحديث ID روم التقارير للروم الجديد المطلوب
+// الرومات الأساسية
 const REPORTS_CHANNEL_ID = '1536506668039274556'; 
 const HOURS_CHANNEL_ID = '1530564311217471639';
 const POINTS_CHANNEL_ID = '1523610705742266378';
@@ -33,11 +33,14 @@ const MASTER_PASSCODE = process.env.MASTER_PASSCODE || "SAW123456";
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const USERS_BIN_ID = process.env.USERS_BIN_ID;
 const LOGS_BIN_ID = process.env.LOGS_BIN_ID;
-const CADETS_BIN_ID = process.env.CADETS_BIN_ID; // ربط حفظ العسكريين سحابياً لعدم التصفير
+const CADETS_BIN_ID = process.env.CADETS_BIN_ID;
 
 let users = [];
 let logs = [];
 let cadetsData = [];
+
+// دالة تأخير لتجنب حظر طلبات Discord (Rate Limit)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function sortCadets() {
     cadetsData.sort((a, b) => {
@@ -55,7 +58,7 @@ function sortCadets() {
     });
 }
 
-// دالة جلب البيانات من Cloud لتجنب ضياع الساعات والتقارير
+// دالة جلب البيانات من Cloud
 async function loadCloudData() {
     if (!JSONBIN_API_KEY) {
         console.log("⚠️ JSONBin Key missing. Running with local memory.");
@@ -83,7 +86,7 @@ async function loadCloudData() {
             cadetsData = Array.isArray(resCadets.data.record) ? resCadets.data.record : [];
         }
 
-        console.log(`✅ Loaded Data from Cloud successfully.`);
+        console.log(`✅ Loaded Cloud Data successfully.`);
     } catch (e) {
         console.error("Error loading Cloud Data:", e.message);
     }
@@ -235,18 +238,25 @@ function syncMember(member) {
 
 async function fetchOldHoursMessages() {
     try {
-        const channel = await client.channels.fetch(HOURS_CHANNEL_ID);
-        if (!channel) return;
+        const channel = await client.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
+        if (!channel) {
+            console.error(`❌ لم يتم العثور على روم الساعات ID: ${HOURS_CHANNEL_ID}`);
+            return;
+        }
 
         let lastId;
         let fetchedCount = 0;
 
-        while (fetchedCount < 5000) {
+        while (fetchedCount < 3000) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
-            const messages = await channel.messages.fetch(options);
-            if (messages.size === 0) break;
+            const messages = await channel.messages.fetch(options).catch(err => {
+                console.error("Hours Fetch Error:", err.message);
+                return null;
+            });
+
+            if (!messages || messages.size === 0) break;
 
             messages.forEach(msg => {
                 const { discordId, addedHours } = parseDutyMessage(msg);
@@ -264,13 +274,15 @@ async function fetchOldHoursMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
+            await delay(200); // تجنب Rate Limit
         }
 
+        console.log("✅ تم حساب الساعات التراكمية للجميع.");
         saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
-        console.error("Error fetching old hours messages:", e);
+        console.error("Fatal Error fetching old hours:", e);
     }
 }
 
@@ -352,8 +364,11 @@ function processReportMessage(msg, emitUpdate = true) {
 
 async function fetchOldReportsMessages() {
     try {
-        const channel = await client.channels.fetch(REPORTS_CHANNEL_ID);
-        if (!channel) return;
+        const channel = await client.channels.fetch(REPORTS_CHANNEL_ID).catch(() => null);
+        if (!channel) {
+            console.error(`❌ لم يتم العثور على روم التقارير ID: ${REPORTS_CHANNEL_ID}`);
+            return;
+        }
 
         let lastId;
         let fetchedCount = 0;
@@ -362,8 +377,12 @@ async function fetchOldReportsMessages() {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
-            const messages = await channel.messages.fetch(options);
-            if (messages.size === 0) break;
+            const messages = await channel.messages.fetch(options).catch(err => {
+                console.error("Reports Fetch Error:", err.message);
+                return null;
+            });
+
+            if (!messages || messages.size === 0) break;
 
             messages.forEach(msg => {
                 processReportMessage(msg, false);
@@ -371,19 +390,21 @@ async function fetchOldReportsMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
+            await delay(200);
         }
 
+        console.log("✅ تم استخراج وحساب تقارير MDT بنجاح.");
         saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
-        console.error("Error fetching old reports:", e);
+        console.error("Fatal Error fetching old reports:", e);
     }
 }
 
 async function fetchOldPointsMessages() {
     try {
-        const channel = await client.channels.fetch(POINTS_CHANNEL_ID);
+        const channel = await client.channels.fetch(POINTS_CHANNEL_ID).catch(() => null);
         if (!channel) return;
 
         let lastId;
@@ -393,8 +414,8 @@ async function fetchOldPointsMessages() {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
-            const messages = await channel.messages.fetch(options);
-            if (messages.size === 0) break;
+            const messages = await channel.messages.fetch(options).catch(() => null);
+            if (!messages || messages.size === 0) break;
 
             messages.forEach(msg => {
                 processPointsMessage(msg, false);
@@ -402,6 +423,7 @@ async function fetchOldPointsMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
+            await delay(200);
         }
 
         saveCadets();
@@ -471,6 +493,7 @@ client.once('ready', async () => {
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
+        // جلب الرسائل القديمة بالتتابع
         await fetchOldHoursMessages();
         await fetchOldPointsMessages();
         await fetchOldReportsMessages();
