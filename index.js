@@ -128,12 +128,20 @@ const client = new Client({
     ]
 });
 
+// دالة معدلة لاستخراج كافة النصوص والحقول داخل الـ Embed
 function getMessageFullText(message) {
     let text = message.content || '';
     if (message.embeds && message.embeds.length > 0) {
         message.embeds.forEach(e => {
-            text += ' ' + (e.title || '') + ' ' + (e.description || '');
-            if (e.fields) e.fields.forEach(f => text += ` ${f.name} ${f.value}`);
+            if (e.title) text += '\n' + e.title;
+            if (e.description) text += '\n' + e.description;
+            if (e.author && e.author.name) text += '\n' + e.author.name;
+            if (e.footer && e.footer.text) text += '\n' + e.footer.text;
+            if (e.fields && e.fields.length > 0) {
+                e.fields.forEach(f => {
+                    text += `\n${f.name}: ${f.value}`;
+                });
+            }
         });
     }
     return text;
@@ -244,51 +252,76 @@ async function fetchOldHoursMessages() {
     }
 }
 
-// دالة معالجة التقارير لكتاب التقرير فقط
+// دالة معالجة واستخراج صاحب التقرير بدقة عالية
 function processReportMessage(msg, emitUpdate = true) {
     const fullText = getMessageFullText(msg);
-    let writerDiscordId = null;
+    if (!fullText.trim()) return;
 
+    let targetCadet = null;
+
+    // 1. إذا كانت الرسالة مرسلة من حساب العسكري المباشر
     if (msg.author && !msg.author.bot) {
-        writerDiscordId = msg.author.id;
-    } else {
-        const writerMatch = fullText.match(/(?:Officer|Report By|Created By|الضابط|مقدم التقرير)\s*[:|-]?\s*<@!?(\d+)>/i);
-        if (writerMatch) {
-            writerDiscordId = writerMatch[1];
-        } else {
-            const firstMention = fullText.match(/<@!?(\d+)>/);
-            if (firstMention) {
-                writerDiscordId = firstMention[1];
+        targetCadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
+    }
+
+    // 2. إذا كانت الرسالة من بوت أو Webhook
+    if (!targetCadet) {
+        // أ) مطابقة عبر Discord ID داخل المنشن
+        const allMentions = [...fullText.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+        if (allMentions.length > 0) {
+            for (const id of allMentions) {
+                const found = cadetsData.find(c => c.discordId === id && c.status === 'active');
+                if (found) {
+                    targetCadet = found;
+                    break;
+                }
             }
         }
     }
 
-    if (!writerDiscordId) return;
-
-    let cadet = cadetsData.find(c => c.discordId === writerDiscordId && c.status === 'active');
-
-    if (cadet) {
-        if (!cadet.reports.some(r => r.id === msg.id)) {
-            const caseNameMatch = fullText.match(/Case Name\s*:\s*([^\n\r]+)/i);
-            const reportTitle = caseNameMatch ? caseNameMatch[1].trim() : 'تقرير جديد';
-
-            cadet.reports.push({
-                id: msg.id,
-                title: reportTitle,
-                content: fullText.slice(0, 150) || 'محتوى التقرير',
-                date: new Date(msg.createdTimestamp || Date.now()).toLocaleDateString('en-US')
-            });
-
-            if (emitUpdate) {
-                logs.unshift({
-                    id: Date.now(),
-                    by: cadet.name,
-                    action: `Submitted MDT Report (${reportTitle})`,
-                    target: cadet.name,
-                    time: new Date().toLocaleString('en-US')
-                });
-                saveLogs();
+    // ب) مطابقة عن طريق الرقم العسكري أو الاسم الصريح داخل التقرير
+    if (!targetCadet) {
+        targetCadet = cadetsData.find(c => {
+            if (c.status !== 'active') return false;
+            
+            const cadetNum = (c.name.match(/\d+/) || [])[0];
+            if (cadetNum && fullText.includes(cadetNum)) {
+                return true;
             }
+
+            const cleanName = c.name.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+            if (cleanName.length > 2 && fullText.toLowerCase().includes(cleanName.toLowerCase())) {
+                return true;
+            }
+
+            return false;
+        });
+    }
+
+    if (!targetCadet) return;
+
+    // استخراج اسم القضية / عنوان التقرير
+    const caseNameMatch = fullText.match(/Case Name\s*:\s*([^\n\r]+)/i) || fullText.match(/Title\s*:\s*([^\n\r]+)/i);
+    const reportTitle = caseNameMatch ? caseNameMatch[1].trim() : 'تقرير MDT';
+
+    // منع التكرار
+    if (!targetCadet.reports.some(r => r.id === msg.id)) {
+        targetCadet.reports.push({
+            id: msg.id,
+            title: reportTitle,
+            content: fullText.slice(0, 180) || 'محتوى التقرير',
+            date: new Date(msg.createdTimestamp || Date.now()).toLocaleDateString('en-US')
+        });
+
+        if (emitUpdate) {
+            logs.unshift({
+                id: Date.now(),
+                by: targetCadet.name,
+                action: `Submitted MDT Report (${reportTitle})`,
+                target: targetCadet.name,
+                time: new Date().toLocaleString('en-US')
+            });
+            saveLogs();
         }
     }
 
@@ -417,7 +450,6 @@ client.once('ready', async () => {
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
-        // جلب الرسائل السابقة بشكل غير معطل للتطبيق
         fetchOldHoursMessages();
         fetchOldPointsMessages();
         fetchOldReportsMessages();
@@ -434,7 +466,6 @@ client.on('guildMemberUpdate', (oldM, newM) => {
 });
 
 client.on('messageCreate', msg => {
-    // 1. الساعات
     if (msg.channel.id === HOURS_CHANNEL_ID) {
         const { discordId, totalHours } = parseDutyMessage(msg);
 
@@ -457,12 +488,10 @@ client.on('messageCreate', msg => {
         }
     }
 
-    // 2. النقاط
     if (msg.channel.id === POINTS_CHANNEL_ID) {
         processPointsMessage(msg, true);
     }
 
-    // 3. الوينقات
     if (msg.channel.id === WINGS_CHANNEL_ID) {
         const fullText = getMessageFullText(msg);
 
@@ -506,13 +535,12 @@ client.on('messageCreate', msg => {
         }
     }
 
-    // 4. التقارير
     if (msg.channel.id === REPORTS_CHANNEL_ID) {
         processReportMessage(msg, true);
     }
 });
 
-// API Routes
+// API Endpoints
 app.get('/api/cadets', (req, res) => {
     sortCadets();
     res.json(cadetsData);
@@ -742,7 +770,6 @@ app.post('/api/user-heartbeat', (req, res) => {
 app.get('/api/users', (req, res) => res.json(Array.isArray(users) ? users : []));
 app.get('/api/wings-list', (req, res) => res.json(ALL_WINGS));
 
-// مؤقت الفحص الدوري لمنع تعليق السيرفر
 setInterval(() => {
     const now = Date.now();
     let updated = false;
