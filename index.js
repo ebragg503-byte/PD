@@ -20,7 +20,8 @@ const GUILD_ID = '1517858234378227834';
 const CADET_ROLE_ID = '1520526818225164329';
 const SOLO_CADET_ROLE_ID = '1522994966597468191';
 
-const REPORTS_CHANNEL_ID = '1520998767325741148';
+// تم تحديث ID روم التقارير للروم الجديد المطلوب
+const REPORTS_CHANNEL_ID = '1536506668039274556'; 
 const HOURS_CHANNEL_ID = '1530564311217471639';
 const POINTS_CHANNEL_ID = '1523610705742266378';
 const WINGS_CHANNEL_ID = '1520527213597032558';
@@ -32,12 +33,12 @@ const MASTER_PASSCODE = process.env.MASTER_PASSCODE || "SAW123456";
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const USERS_BIN_ID = process.env.USERS_BIN_ID;
 const LOGS_BIN_ID = process.env.LOGS_BIN_ID;
+const CADETS_BIN_ID = process.env.CADETS_BIN_ID; // ربط حفظ العسكريين سحابياً لعدم التصفير
 
 let users = [];
 let logs = [];
 let cadetsData = [];
 
-// دالة فرز وترتيب العسكريين (Solo Cadet أولاً ثم حسب الأرقام)
 function sortCadets() {
     cadetsData.sort((a, b) => {
         if (a.rank === 'Solo Cadet' && b.rank !== 'Solo Cadet') return -1;
@@ -54,32 +55,51 @@ function sortCadets() {
     });
 }
 
-// دالة جلب البيانات من JSONBin مع الحماية
+// دالة جلب البيانات من Cloud لتجنب ضياع الساعات والتقارير
 async function loadCloudData() {
-    if (!JSONBIN_API_KEY || !USERS_BIN_ID) {
-        console.log("⚠️ JSONBin Variables missing. Running with local memory.");
+    if (!JSONBIN_API_KEY) {
+        console.log("⚠️ JSONBin Key missing. Running with local memory.");
         return;
     }
     try {
-        const resUsers = await axios.get(`https://api.jsonbin.io/v3/b/${USERS_BIN_ID}/latest`, {
-            headers: { 'X-Master-Key': JSONBIN_API_KEY }
-        });
-        
-        const fetchedUsers = resUsers.data.record;
-        users = Array.isArray(fetchedUsers) ? fetchedUsers : [];
+        if (USERS_BIN_ID) {
+            const resUsers = await axios.get(`https://api.jsonbin.io/v3/b/${USERS_BIN_ID}/latest`, {
+                headers: { 'X-Master-Key': JSONBIN_API_KEY }
+            });
+            users = Array.isArray(resUsers.data.record) ? resUsers.data.record : [];
+        }
 
         if (LOGS_BIN_ID) {
             const resLogs = await axios.get(`https://api.jsonbin.io/v3/b/${LOGS_BIN_ID}/latest`, {
                 headers: { 'X-Master-Key': JSONBIN_API_KEY }
             });
-            const fetchedLogs = resLogs.data.record;
-            logs = Array.isArray(fetchedLogs) ? fetchedLogs : [];
+            logs = Array.isArray(resLogs.data.record) ? resLogs.data.record : [];
         }
-        console.log(`✅ Loaded ${users.length} users and ${logs.length} logs from Cloud.`);
+
+        if (CADETS_BIN_ID) {
+            const resCadets = await axios.get(`https://api.jsonbin.io/v3/b/${CADETS_BIN_ID}/latest`, {
+                headers: { 'X-Master-Key': JSONBIN_API_KEY }
+            });
+            cadetsData = Array.isArray(resCadets.data.record) ? resCadets.data.record : [];
+        }
+
+        console.log(`✅ Loaded Data from Cloud successfully.`);
     } catch (e) {
         console.error("Error loading Cloud Data:", e.message);
-        users = [];
-        logs = [];
+    }
+}
+
+async function saveCadets() {
+    if (!JSONBIN_API_KEY || !CADETS_BIN_ID) return;
+    try {
+        await axios.put(`https://api.jsonbin.io/v3/b/${CADETS_BIN_ID}`, cadetsData, {
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Master-Key': JSONBIN_API_KEY 
+            }
+        });
+    } catch (e) {
+        console.error("Error saving cadets to cloud:", e.message);
     }
 }
 
@@ -128,7 +148,6 @@ const client = new Client({
     ]
 });
 
-// دالة معدلة لاستخراج كافة النصوص والحقول داخل الـ Embed
 function getMessageFullText(message) {
     let text = message.content || '';
     if (message.embeds && message.embeds.length > 0) {
@@ -149,7 +168,7 @@ function getMessageFullText(message) {
 
 function parseDutyMessage(message) {
     let discordId = null;
-    let totalHours = null;
+    let addedHours = 0;
 
     const fullText = getMessageFullText(message);
 
@@ -163,22 +182,22 @@ function parseDutyMessage(message) {
 
     const minutesMatch = fullText.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i) || fullText.match(/Time In Server\s*[\r\n]*\s*(\d+)m/i);
     if (minutesMatch) {
-        totalHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
+        addedHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
     } else {
         const dutyTimeMatch = fullText.match(/(?:Total Duty Time|Time In Server)\s*[\r\n]*\s*(\d+)h\s*(\d+)m/i);
         if (dutyTimeMatch) {
             const hrs = parseInt(dutyTimeMatch[1]);
             const mins = parseInt(dutyTimeMatch[2]);
-            totalHours = parseFloat((hrs + (mins / 60)).toFixed(2));
+            addedHours = parseFloat((hrs + (mins / 60)).toFixed(2));
         } else {
             const pureHoursMatch = fullText.match(/Total Duty Time\s*[\r\n]*\s*(\d+(?:\.\d+)?)h/i) || fullText.match(/(\d+(?:\.\d+)?)\s*س/i);
             if (pureHoursMatch) {
-                totalHours = parseFloat(pureHoursMatch[1]);
+                addedHours = parseFloat(pureHoursMatch[1]);
             }
         }
     }
 
-    return { discordId, totalHours };
+    return { discordId, addedHours };
 }
 
 function syncMember(member) {
@@ -202,6 +221,7 @@ function syncMember(member) {
                 hours: 0,
                 points: 0,
                 reports: [],
+                processedHoursMsgIds: [],
                 wings: [],
                 status: 'active'
             });
@@ -220,9 +240,8 @@ async function fetchOldHoursMessages() {
 
         let lastId;
         let fetchedCount = 0;
-        const maxLimit = 10000;
 
-        while (fetchedCount < maxLimit) {
+        while (fetchedCount < 5000) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
@@ -230,12 +249,14 @@ async function fetchOldHoursMessages() {
             if (messages.size === 0) break;
 
             messages.forEach(msg => {
-                const { discordId, totalHours } = parseDutyMessage(msg);
-                if (discordId && totalHours !== null) {
+                const { discordId, addedHours } = parseDutyMessage(msg);
+                if (discordId && addedHours > 0) {
                     let cadet = cadetsData.find(c => c.discordId === discordId);
                     if (cadet) {
-                        if (totalHours > cadet.hours) {
-                            cadet.hours = totalHours;
+                        if (!cadet.processedHoursMsgIds) cadet.processedHoursMsgIds = [];
+                        if (!cadet.processedHoursMsgIds.includes(msg.id)) {
+                            cadet.hours = parseFloat((cadet.hours + addedHours).toFixed(2));
+                            cadet.processedHoursMsgIds.push(msg.id);
                         }
                     }
                 }
@@ -245,6 +266,7 @@ async function fetchOldHoursMessages() {
             fetchedCount += messages.size;
         }
 
+        saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
@@ -252,21 +274,17 @@ async function fetchOldHoursMessages() {
     }
 }
 
-// دالة معالجة واستخراج صاحب التقرير بدقة عالية
 function processReportMessage(msg, emitUpdate = true) {
     const fullText = getMessageFullText(msg);
     if (!fullText.trim()) return;
 
     let targetCadet = null;
 
-    // 1. إذا كانت الرسالة مرسلة من حساب العسكري المباشر
     if (msg.author && !msg.author.bot) {
         targetCadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
     }
 
-    // 2. إذا كانت الرسالة من بوت أو Webhook
     if (!targetCadet) {
-        // أ) مطابقة عبر Discord ID داخل المنشن
         const allMentions = [...fullText.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
         if (allMentions.length > 0) {
             for (const id of allMentions) {
@@ -279,7 +297,6 @@ function processReportMessage(msg, emitUpdate = true) {
         }
     }
 
-    // ب) مطابقة عن طريق الرقم العسكري أو الاسم الصريح داخل التقرير
     if (!targetCadet) {
         targetCadet = cadetsData.find(c => {
             if (c.status !== 'active') return false;
@@ -300,11 +317,11 @@ function processReportMessage(msg, emitUpdate = true) {
 
     if (!targetCadet) return;
 
-    // استخراج اسم القضية / عنوان التقرير
     const caseNameMatch = fullText.match(/Case Name\s*:\s*([^\n\r]+)/i) || fullText.match(/Title\s*:\s*([^\n\r]+)/i);
     const reportTitle = caseNameMatch ? caseNameMatch[1].trim() : 'تقرير MDT';
 
-    // منع التكرار
+    if (!targetCadet.reports) targetCadet.reports = [];
+
     if (!targetCadet.reports.some(r => r.id === msg.id)) {
         targetCadet.reports.push({
             id: msg.id,
@@ -326,6 +343,7 @@ function processReportMessage(msg, emitUpdate = true) {
     }
 
     if (emitUpdate) {
+        saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("logsUpdate", logs);
@@ -340,7 +358,7 @@ async function fetchOldReportsMessages() {
         let lastId;
         let fetchedCount = 0;
 
-        while (fetchedCount < 2000) {
+        while (fetchedCount < 3000) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
@@ -355,6 +373,7 @@ async function fetchOldReportsMessages() {
             fetchedCount += messages.size;
         }
 
+        saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
@@ -385,6 +404,7 @@ async function fetchOldPointsMessages() {
             fetchedCount += messages.size;
         }
 
+        saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
@@ -430,6 +450,7 @@ function processPointsMessage(msg, emitUpdate = true) {
     });
 
     if (emitUpdate) {
+        saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("logsUpdate", logs);
@@ -443,16 +464,16 @@ client.once('ready', async () => {
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const members = await guild.members.fetch();
-        cadetsData = [];
+        
         members.forEach(m => syncMember(m));
 
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
-        fetchOldHoursMessages();
-        fetchOldPointsMessages();
-        fetchOldReportsMessages();
+        await fetchOldHoursMessages();
+        await fetchOldPointsMessages();
+        await fetchOldReportsMessages();
 
     } catch (e) {
         console.error("Sync error:", e);
@@ -461,29 +482,36 @@ client.once('ready', async () => {
 
 client.on('guildMemberUpdate', (oldM, newM) => {
     syncMember(newM);
+    saveCadets();
     sortCadets();
     io.emit("cadetsUpdate", cadetsData);
 });
 
 client.on('messageCreate', msg => {
     if (msg.channel.id === HOURS_CHANNEL_ID) {
-        const { discordId, totalHours } = parseDutyMessage(msg);
+        const { discordId, addedHours } = parseDutyMessage(msg);
 
-        if (discordId && totalHours !== null) {
+        if (discordId && addedHours > 0) {
             let cadet = cadetsData.find(c => c.discordId === discordId && c.status === 'active');
             if (cadet) {
-                cadet.hours = totalHours;
-                logs.unshift({
-                    id: Date.now(),
-                    by: 'Duty System',
-                    action: `Updated total hours to (${totalHours} hrs)`,
-                    target: cadet.name,
-                    time: new Date().toLocaleString('en-US')
-                });
-                saveLogs();
-                sortCadets();
-                io.emit("cadetsUpdate", cadetsData);
-                io.emit("logsUpdate", logs);
+                if (!cadet.processedHoursMsgIds) cadet.processedHoursMsgIds = [];
+                if (!cadet.processedHoursMsgIds.includes(msg.id)) {
+                    cadet.hours = parseFloat((cadet.hours + addedHours).toFixed(2));
+                    cadet.processedHoursMsgIds.push(msg.id);
+                    
+                    logs.unshift({
+                        id: Date.now(),
+                        by: 'Duty System',
+                        action: `Added (${addedHours} hrs) - Total: (${cadet.hours} hrs)`,
+                        target: cadet.name,
+                        time: new Date().toLocaleString('en-US')
+                    });
+                    saveLogs();
+                    saveCadets();
+                    sortCadets();
+                    io.emit("cadetsUpdate", cadetsData);
+                    io.emit("logsUpdate", logs);
+                }
             }
         }
     }
@@ -528,6 +556,7 @@ client.on('messageCreate', msg => {
                         }
                     }
                 });
+                saveCadets();
                 sortCadets();
                 io.emit("cadetsUpdate", cadetsData);
                 io.emit("logsUpdate", logs);
@@ -576,6 +605,7 @@ app.post('/api/update-cadet', (req, res) => {
     }
 
     if (reportTitle || reportContent) {
+        if (!cadet.reports) cadet.reports = [];
         cadet.reports.push({
             id: Date.now().toString(),
             title: reportTitle || 'Manual Report',
@@ -594,6 +624,7 @@ app.post('/api/update-cadet', (req, res) => {
             time: new Date().toLocaleString('en-US')
         });
         saveLogs();
+        saveCadets();
     }
 
     sortCadets();
