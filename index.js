@@ -37,7 +37,26 @@ let users = [];
 let logs = [];
 let cadetsData = [];
 
-// دالة جلب البيانات من JSONBin مع الحماية من قيم undefined
+// دالة ترتيب العسكريين (Solo Cadet أولاً ثم حسب الرقم في الاسم)
+function sortCadets() {
+    cadetsData.sort((a, b) => {
+        // ترتيب حسب الرتبة (Solo Cadet قبل Cadet)
+        if (a.rank === 'Solo Cadet' && b.rank !== 'Solo Cadet') return -1;
+        if (a.rank !== 'Solo Cadet' && b.rank === 'Solo Cadet') return 1;
+
+        // استخراج الأرقام من الأسماء للترتيب بها (مثال: 400, 401, 402)
+        const numA = parseInt((a.name.match(/\d+/) || [0])[0]);
+        const numB = parseInt((b.name.match(/\d+/) || [0])[0]);
+
+        if (numA !== numB) {
+            return numA - numB;
+        }
+
+        return a.name.localeCompare(b.name);
+    });
+}
+
+// دالة جلب البيانات من JSONBin
 async function loadCloudData() {
     if (!JSONBIN_API_KEY || !USERS_BIN_ID) {
         console.log("⚠️ JSONBin Variables missing. Running with local memory.");
@@ -66,7 +85,6 @@ async function loadCloudData() {
     }
 }
 
-// دالة حفظ المستخدمين في السحاب
 async function saveUsers() {
     if (!JSONBIN_API_KEY || !USERS_BIN_ID) return;
     try {
@@ -81,7 +99,6 @@ async function saveUsers() {
     }
 }
 
-// دالة حفظ السجلات في السحاب
 async function saveLogs() {
     if (!JSONBIN_API_KEY || !LOGS_BIN_ID) return;
     try {
@@ -148,7 +165,7 @@ function parseDutyMessage(message) {
             const mins = parseInt(dutyTimeMatch[2]);
             totalHours = parseFloat((hrs + (mins / 60)).toFixed(2));
         } else {
-            const pureHoursMatch = fullText.match(/Total Duty Time\s*[\r\n]*\s*(\d+(?:\.\d+)?)h/i);
+            const pureHoursMatch = fullText.match(/Total Duty Time\s*[\r\n]*\s*(\d+(?:\.\d+)?)h/i) || fullText.match(/(\d+(?:\.\d+)?)\s*س/i);
             if (pureHoursMatch) {
                 totalHours = parseFloat(pureHoursMatch[1]);
             }
@@ -222,9 +239,50 @@ async function fetchOldHoursMessages() {
             fetchedCount += messages.size;
         }
 
+        sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old messages:", e);
+    }
+}
+
+async function fetchOldReportsMessages() {
+    try {
+        const channel = await client.channels.fetch(REPORTS_CHANNEL_ID);
+        if (!channel) return;
+
+        let lastId;
+        let fetchedCount = 0;
+
+        while (fetchedCount < 2000) {
+            const options = { limit: 100 };
+            if (lastId) options.before = lastId;
+
+            const messages = await channel.messages.fetch(options);
+            if (messages.size === 0) break;
+
+            messages.forEach(msg => {
+                let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
+                if (cadet) {
+                    if (!cadet.reports.some(r => r.id === msg.id)) {
+                        cadet.reports.push({
+                            id: msg.id,
+                            title: (msg.content || 'تقرير').slice(0, 40),
+                            content: msg.content || 'محتوى التقرير',
+                            date: new Date(msg.createdTimestamp).toLocaleDateString('en-US')
+                        });
+                    }
+                }
+            });
+
+            lastId = messages.last().id;
+            fetchedCount += messages.size;
+        }
+
+        sortCadets();
+        io.emit("cadetsUpdate", cadetsData);
+    } catch (e) {
+        console.error("Error fetching old reports:", e);
     }
 }
 
@@ -251,6 +309,7 @@ async function fetchOldPointsMessages() {
             fetchedCount += messages.size;
         }
 
+        sortCadets();
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old points messages:", e);
@@ -295,6 +354,7 @@ function processPointsMessage(msg, emitUpdate = true) {
     });
 
     if (emitUpdate) {
+        sortCadets();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("logsUpdate", logs);
     }
@@ -310,12 +370,14 @@ client.once('ready', async () => {
         cadetsData = [];
         members.forEach(m => syncMember(m));
 
+        sortCadets();
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
-        // جلب الرسائل القديمة في الخلفية لتفادي الـ Block
+        // جلب البيانات القديمة
         fetchOldHoursMessages();
         fetchOldPointsMessages();
+        fetchOldReportsMessages();
 
     } catch (e) {
         console.error("Sync error:", e);
@@ -324,10 +386,12 @@ client.once('ready', async () => {
 
 client.on('guildMemberUpdate', (oldM, newM) => {
     syncMember(newM);
+    sortCadets();
     io.emit("cadetsUpdate", cadetsData);
 });
 
 client.on('messageCreate', msg => {
+    // 1. حساب الساعات
     if (msg.channel.id === HOURS_CHANNEL_ID) {
         const { discordId, totalHours } = parseDutyMessage(msg);
 
@@ -343,16 +407,19 @@ client.on('messageCreate', msg => {
                     time: new Date().toLocaleString('en-US')
                 });
                 saveLogs();
+                sortCadets();
                 io.emit("cadetsUpdate", cadetsData);
                 io.emit("logsUpdate", logs);
             }
         }
     }
 
+    // 2. حساب النقاط
     if (msg.channel.id === POINTS_CHANNEL_ID) {
         processPointsMessage(msg, true);
     }
 
+    // 3. حساب الوينقات
     if (msg.channel.id === WINGS_CHANNEL_ID) {
         const fullText = getMessageFullText(msg);
 
@@ -389,39 +456,43 @@ client.on('messageCreate', msg => {
                         }
                     }
                 });
+                sortCadets();
                 io.emit("cadetsUpdate", cadetsData);
                 io.emit("logsUpdate", logs);
             }
         }
     }
 
-    if (msg.author.bot) return;
-
+    // 4. احتساب التقارير لأي رسالة يتم إرسالها في الشانل
     if (msg.channel.id === REPORTS_CHANNEL_ID) {
         let cadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
-        if (!cadet) return;
-
-        cadet.reports.push({
-            id: msg.id,
-            title: msg.content.slice(0, 40) || 'New Report',
-            content: msg.content,
-            date: new Date().toLocaleDateString('en-US')
-        });
-        logs.unshift({
-            id: Date.now(),
-            by: msg.author.username,
-            action: `Automatically added MDT Report`,
-            target: cadet.name,
-            time: new Date().toLocaleString('en-US')
-        });
-        saveLogs();
-        io.emit("cadetsUpdate", cadetsData);
-        io.emit("logsUpdate", logs);
+        if (cadet) {
+            cadet.reports.push({
+                id: msg.id,
+                title: msg.content ? msg.content.slice(0, 40) : 'تقرير جديد',
+                content: msg.content || 'محتوى التقرير',
+                date: new Date().toLocaleDateString('en-US')
+            });
+            logs.unshift({
+                id: Date.now(),
+                by: msg.author.username,
+                action: `Automatically added MDT Report`,
+                target: cadet.name,
+                time: new Date().toLocaleString('en-US')
+            });
+            saveLogs();
+            sortCadets();
+            io.emit("cadetsUpdate", cadetsData);
+            io.emit("logsUpdate", logs);
+        }
     }
 });
 
-// API Routes
-app.get('/api/cadets', (req, res) => res.json(cadetsData));
+// Routes API
+app.get('/api/cadets', (req, res) => {
+    sortCadets();
+    res.json(cadetsData);
+});
 
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, reportTitle, reportContent, wings, editedBy, requesterId } = req.body;
@@ -473,6 +544,7 @@ app.post('/api/update-cadet', (req, res) => {
         saveLogs();
     }
 
+    sortCadets();
     io.emit("cadetsUpdate", cadetsData);
     io.emit("logsUpdate", logs);
     res.json({ success: true });
@@ -646,7 +718,6 @@ app.post('/api/user-heartbeat', (req, res) => {
 app.get('/api/users', (req, res) => res.json(Array.isArray(users) ? users : []));
 app.get('/api/wings-list', (req, res) => res.json(ALL_WINGS));
 
-// التعديل الهام هنا لحماية السيرفر من الكراش
 setInterval(() => {
     const now = Date.now();
     let updated = false;
