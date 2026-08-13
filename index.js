@@ -171,36 +171,49 @@ function getMessageFullText(message) {
 
 function parseDutyMessage(message) {
     let discordId = null;
-    let addedHours = 0;
+    let callsign = null;
+    let charName = null;
+    let totalHours = 0;
 
     const fullText = getMessageFullText(message);
 
-    const mentionMatch = fullText.match(/<@!?(\d+)>/);
-    if (mentionMatch) {
-        discordId = mentionMatch[1];
-    } else {
-        const idMatch = fullText.match(/Discord\s*[:|-]?\s*<@!?(\d+)>|Discord\s*[:|-]?\s*(\d{17,19})/i);
-        if (idMatch) discordId = idMatch[1] || idMatch[2];
-    }
-
-    const minutesMatch = fullText.match(/Total Minutes\s*[\r\n]*\s*(\d+)/i) || fullText.match(/Time In Server\s*[\r\n]*\s*(\d+)m/i);
-    if (minutesMatch) {
-        addedHours = parseFloat((parseInt(minutesMatch[1]) / 60).toFixed(2));
-    } else {
-        const dutyTimeMatch = fullText.match(/(?:Total Duty Time|Time In Server)\s*[\r\n]*\s*(\d+)h\s*(\d+)m/i);
-        if (dutyTimeMatch) {
-            const hrs = parseInt(dutyTimeMatch[1]);
-            const mins = parseInt(dutyTimeMatch[2]);
-            addedHours = parseFloat((hrs + (mins / 60)).toFixed(2));
+    // 1. استخراج الـ Discord ID إن وجد
+    const idMatches = [...fullText.matchAll(/<@!?(\d+)>|(\d{17,19})/g)];
+    if (idMatches.length > 0) {
+        const discordFieldMatch = fullText.match(/Discord\s*[:|-]?\s*<@!?(\d+)>|Discord\s*[:|-]?\s*(\d{17,19})/i);
+        if (discordFieldMatch) {
+            discordId = discordFieldMatch[1] || discordFieldMatch[2];
         } else {
-            const pureHoursMatch = fullText.match(/Total Duty Time\s*[\r\n]*\s*(\d+(?:\.\d+)?)h/i) || fullText.match(/(\d+(?:\.\d+)?)\s*س/i);
-            if (pureHoursMatch) {
-                addedHours = parseFloat(pureHoursMatch[1]);
-            }
+            discordId = idMatches[0][1] || idMatches[0][2];
         }
     }
 
-    return { discordId, addedHours };
+    // 2. استخراج الكولساين / Server ID (مثل 403)
+    const callsignMatch = fullText.match(/Server ID\s*:\s*(\d+)/i) || fullText.match(/Callsign\s*:\s*(\d+)/i);
+    if (callsignMatch) {
+        callsign = callsignMatch[1];
+    }
+
+    // 3. استخراج اسم الشخصية (مثل Ali Nono)
+    const nameMatch = fullText.match(/Character Name\s*:\s*([^\n\r]+)/i);
+    if (nameMatch) {
+        charName = nameMatch[1].trim();
+    }
+
+    // 4. استخراج إجمالي الساعات/الدقائق التراكمية من الرسالة
+    const totalMinsMatch = fullText.match(/Total Minutes\s*[:|-]?\s*(\d+)/i);
+    if (totalMinsMatch) {
+        totalHours = parseFloat((parseInt(totalMinsMatch[1]) / 60).toFixed(2));
+    } else {
+        const dutyTimeMatch = fullText.match(/Total Duty Time\s*[:|-]?\s*(\d+)h\s*(\d+)m/i) || fullText.match(/Time In Server\s*[:|-]?\s*(\d+)h\s*(\d+)m/i);
+        if (dutyTimeMatch) {
+            const hrs = parseInt(dutyTimeMatch[1]);
+            const mins = parseInt(dutyTimeMatch[2]);
+            totalHours = parseFloat((hrs + (mins / 60)).toFixed(2));
+        }
+    }
+
+    return { discordId, callsign, charName, totalHours };
 }
 
 function syncMember(member) {
@@ -244,7 +257,7 @@ async function fetchOldHoursMessages() {
             return;
         }
 
-        // إعادة تصفير الساعات والرسائل المعالجة لتجنب التكرار والتراكم الخاطئ
+        // تصفير الساعات لبدء الإحصاء الدقيق
         cadetsData.forEach(c => {
             c.hours = 0;
             c.processedHoursMsgIds = [];
@@ -265,13 +278,25 @@ async function fetchOldHoursMessages() {
             if (!messages || messages.size === 0) break;
 
             messages.forEach(msg => {
-                const { discordId, addedHours } = parseDutyMessage(msg);
-                if (discordId && addedHours > 0) {
-                    let cadet = cadetsData.find(c => c.discordId === discordId);
+                const { discordId, callsign, charName, totalHours } = parseDutyMessage(msg);
+
+                if (totalHours > 0) {
+                    let cadet = cadetsData.find(c => {
+                        if (discordId && c.discordId === discordId) return true;
+                        
+                        if (callsign) {
+                            const cNum = (c.name.match(/\d+/) || [])[0];
+                            if (cNum && cNum === callsign) return true;
+                        }
+
+                        if (charName && c.name.toLowerCase().includes(charName.toLowerCase())) return true;
+
+                        return false;
+                    });
+
                     if (cadet) {
-                        if (!cadet.processedHoursMsgIds.includes(msg.id)) {
-                            cadet.hours = parseFloat((cadet.hours + addedHours).toFixed(2));
-                            cadet.processedHoursMsgIds.push(msg.id);
+                        if (totalHours > cadet.hours) {
+                            cadet.hours = totalHours;
                         }
                     }
                 }
@@ -279,10 +304,10 @@ async function fetchOldHoursMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
-            await delay(250); // تجنب Rate Limit
+            await delay(200);
         }
 
-        console.log("✅ تم حساب الساعات التراكمية للجميع بنجاح.");
+        console.log("✅ تم إحصاء الساعات بنجاح وتحديث الجدول.");
         saveCadets();
         sortCadets();
         io.emit("cadetsUpdate", cadetsData);
@@ -295,7 +320,6 @@ function processReportMessage(msg, emitUpdate = true) {
     const fullText = getMessageFullText(msg);
     if (!fullText.trim()) return;
 
-    // 1. ربط التقرير بكاتب الرسالة فقط لمنع احتسابه لأشخاص منشنتهم بالتقرير
     if (!msg.author || msg.author.bot) return;
 
     const targetCadet = cadetsData.find(c => c.discordId === msg.author.id && c.status === 'active');
@@ -307,7 +331,6 @@ function processReportMessage(msg, emitUpdate = true) {
 
     if (!targetCadet.reports) targetCadet.reports = [];
 
-    // منع تكرار احتساب نفس التقرير
     if (!targetCadet.reports.some(r => r.id === msg.id)) {
         targetCadet.reports.push({
             id: msg.id,
@@ -344,7 +367,6 @@ async function fetchOldReportsMessages() {
             return;
         }
 
-        // تفريغ التقارير القديمة لإعادة الفحص المباشر لكاتب الرسالة فقط
         cadetsData.forEach(c => {
             c.reports = [];
         });
@@ -472,7 +494,6 @@ client.once('ready', async () => {
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
-        // جلب الرسائل القديمة بالتتابع
         await fetchOldHoursMessages();
         await fetchOldPointsMessages();
         await fetchOldReportsMessages();
@@ -491,29 +512,34 @@ client.on('guildMemberUpdate', (oldM, newM) => {
 
 client.on('messageCreate', msg => {
     if (msg.channel.id === HOURS_CHANNEL_ID) {
-        const { discordId, addedHours } = parseDutyMessage(msg);
+        const { discordId, callsign, charName, totalHours } = parseDutyMessage(msg);
 
-        if (discordId && addedHours > 0) {
-            let cadet = cadetsData.find(c => c.discordId === discordId && c.status === 'active');
-            if (cadet) {
-                if (!cadet.processedHoursMsgIds) cadet.processedHoursMsgIds = [];
-                if (!cadet.processedHoursMsgIds.includes(msg.id)) {
-                    cadet.hours = parseFloat((cadet.hours + addedHours).toFixed(2));
-                    cadet.processedHoursMsgIds.push(msg.id);
-                    
-                    logs.unshift({
-                        id: Date.now(),
-                        by: 'Duty System',
-                        action: `Added (${addedHours} hrs) - Total: (${cadet.hours} hrs)`,
-                        target: cadet.name,
-                        time: new Date().toLocaleString('en-US')
-                    });
-                    saveLogs();
-                    saveCadets();
-                    sortCadets();
-                    io.emit("cadetsUpdate", cadetsData);
-                    io.emit("logsUpdate", logs);
+        if (totalHours > 0) {
+            let cadet = cadetsData.find(c => {
+                if (discordId && c.discordId === discordId) return true;
+                if (callsign) {
+                    const cNum = (c.name.match(/\d+/) || [])[0];
+                    if (cNum && cNum === callsign) return true;
                 }
+                if (charName && c.name.toLowerCase().includes(charName.toLowerCase())) return true;
+                return false;
+            });
+
+            if (cadet && totalHours > cadet.hours) {
+                cadet.hours = totalHours;
+                
+                logs.unshift({
+                    id: Date.now(),
+                    by: 'Duty System',
+                    action: `Updated hours to (${cadet.hours} hrs)`,
+                    target: cadet.name,
+                    time: new Date().toLocaleString('en-US')
+                });
+                saveLogs();
+                saveCadets();
+                sortCadets();
+                io.emit("cadetsUpdate", cadetsData);
+                io.emit("logsUpdate", logs);
             }
         }
     }
