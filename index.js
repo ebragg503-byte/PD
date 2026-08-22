@@ -18,13 +18,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 
-// 1. مصفوفة رتب LSPD مصفوفة بالأوزان لترتيبها تلقائياً
-// 💡 ملاحظة: استبدل ROLE_ID_HERE بايديات الرتب الحقيقية في سيرفر الديسكورد
 const LSPD_RANKS = [
     { id: '1520526818225164329', name: 'Cadet', weight: 1 },
     { id: '1522994966597468191', name: 'Solo Cadet', weight: 2 },
     { id: '1520526816832524402', name: 'Officer I', weight: 3 },
-    { id: '1520526816215826634', name: 'Officer II', weight: 4 },
+    { id: '1520526816832524402', name: 'Officer II', weight: 4 },
     { id: '1520526814835900439', name: 'Officer III', weight: 5 },
     { id: '1520526814231920680', name: 'Senior Officer', weight: 6 },
     { id: '1520526813011513557', name: 'Senior Lead Officer', weight: 7 },
@@ -54,22 +52,17 @@ let cadetsData = [];
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// ترتيب الأفراد حسب أوزان الرتب ثم الرقم الوظيفي/الاسم
 function sortCadets() {
     cadetsData.sort((a, b) => {
         const rankA = LSPD_RANKS.find(r => r.name === a.rank)?.weight || 0;
         const rankB = LSPD_RANKS.find(r => r.name === b.rank)?.weight || 0;
 
-        if (rankA !== rankB) {
-            return rankA - rankB; // ترتيب من Cadet إلى First Lieutenant
-        }
+        if (rankA !== rankB) return rankA - rankB;
 
         const numA = parseInt((a.name.match(/\d+/) || [0])[0]);
         const numB = parseInt((b.name.match(/\d+/) || [0])[0]);
 
-        if (numA !== numB) {
-            return numA - numB;
-        }
+        if (numA !== numB) return numA - numB;
 
         return a.name.localeCompare(b.name);
     });
@@ -204,14 +197,10 @@ function parseDutyMessage(message) {
     }
 
     const callsignMatch = fullText.match(/Server ID\s*:\s*(\d+)/i) || fullText.match(/Callsign\s*:\s*(\d+)/i);
-    if (callsignMatch) {
-        callsign = callsignMatch[1];
-    }
+    if (callsignMatch) callsign = callsignMatch[1];
 
     const nameMatch = fullText.match(/Character Name\s*:\s*([^\n\r]+)/i);
-    if (nameMatch) {
-        charName = nameMatch[1].trim();
-    }
+    if (nameMatch) charName = nameMatch[1].trim();
 
     const totalMinsMatch = fullText.match(/Total Minutes\s*[:|-]?\s*(\d+)/i);
     if (totalMinsMatch) {
@@ -228,7 +217,6 @@ function parseDutyMessage(message) {
     return { discordId, callsign, charName, totalHours };
 }
 
-// مزامنة كافة أعضاء سيرفر LSPD
 function syncMember(member) {
     const userRanks = LSPD_RANKS.filter(r => member.roles.cache.has(r.id));
     const highestRank = userRanks.sort((a, b) => b.weight - a.weight)[0];
@@ -267,15 +255,10 @@ async function fetchOldHoursMessages() {
         const channel = await client.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
         if (!channel) return;
 
-        cadetsData.forEach(c => {
-            c.hours = 0;
-            c.processedHoursMsgIds = [];
-        });
-
         let lastId;
         let fetchedCount = 0;
 
-        while (fetchedCount < 3000) {
+        while (fetchedCount < 1000) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
@@ -304,7 +287,7 @@ async function fetchOldHoursMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
-            await delay(200);
+            await delay(100);
         }
 
         saveCadets();
@@ -360,12 +343,10 @@ async function fetchOldReportsMessages() {
         const channel = await client.channels.fetch(REPORTS_CHANNEL_ID).catch(() => null);
         if (!channel) return;
 
-        cadetsData.forEach(c => { c.reports = []; });
-
         let lastId;
         let fetchedCount = 0;
 
-        while (fetchedCount < 3000) {
+        while (fetchedCount < 1000) {
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
 
@@ -376,7 +357,7 @@ async function fetchOldReportsMessages() {
 
             lastId = messages.last().id;
             fetchedCount += messages.size;
-            await delay(250);
+            await delay(100);
         }
 
         saveCadets();
@@ -384,36 +365,6 @@ async function fetchOldReportsMessages() {
         io.emit("cadetsUpdate", cadetsData);
     } catch (e) {
         console.error("Error fetching old reports:", e);
-    }
-}
-
-async function fetchOldPointsMessages() {
-    try {
-        const channel = await client.channels.fetch(POINTS_CHANNEL_ID).catch(() => null);
-        if (!channel) return;
-
-        let lastId;
-        let fetchedCount = 0;
-
-        while (fetchedCount < 2000) {
-            const options = { limit: 100 };
-            if (lastId) options.before = lastId;
-
-            const messages = await channel.messages.fetch(options).catch(() => null);
-            if (!messages || messages.size === 0) break;
-
-            messages.forEach(msg => processPointsMessage(msg, false));
-
-            lastId = messages.last().id;
-            fetchedCount += messages.size;
-            await delay(200);
-        }
-
-        saveCadets();
-        sortCadets();
-        io.emit("cadetsUpdate", cadetsData);
-    } catch (e) {
-        console.error("Error fetching old points messages:", e);
     }
 }
 
@@ -461,7 +412,37 @@ function processPointsMessage(msg, emitUpdate = true) {
     }
 }
 
-// ⚠️ تعديل ترتيب التشغيل لمنع فقدان البيانات واكتمال جلب القوائم قبل إرسال التحديث
+async function fetchOldPointsMessages() {
+    try {
+        const channel = await client.channels.fetch(POINTS_CHANNEL_ID).catch(() => null);
+        if (!channel) return;
+
+        let lastId;
+        let fetchedCount = 0;
+
+        while (fetchedCount < 1000) {
+            const options = { limit: 100 };
+            if (lastId) options.before = lastId;
+
+            const messages = await channel.messages.fetch(options).catch(() => null);
+            if (!messages || messages.size === 0) break;
+
+            messages.forEach(msg => processPointsMessage(msg, false));
+
+            lastId = messages.last().id;
+            fetchedCount += messages.size;
+            await delay(100);
+        }
+
+        saveCadets();
+        sortCadets();
+        io.emit("cadetsUpdate", cadetsData);
+    } catch (e) {
+        console.error("Error fetching old points messages:", e);
+    }
+}
+
+// تشغيل جلب الرسائل القديمة في الخلفية لعدم تجميد السيرفر
 client.once('ready', async () => {
     console.log(`🤖 Bot online as ${client.user.tag}`);
     await loadCloudData();
@@ -471,14 +452,19 @@ client.once('ready', async () => {
         const members = await guild.members.fetch();
         
         members.forEach(m => syncMember(m));
-
-        await fetchOldHoursMessages();
-        await fetchOldPointsMessages();
-        await fetchOldReportsMessages();
-
         sortCadets();
+
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
+
+        // تشغيل عملية جلب البيانات القديمة بدون تعطيل البوت
+        (async () => {
+            console.log("🔄 Syncing old messages in background...");
+            await fetchOldHoursMessages();
+            await fetchOldPointsMessages();
+            await fetchOldReportsMessages();
+            console.log("✅ Background sync completed.");
+        })();
 
     } catch (e) {
         console.error("Sync error:", e);
@@ -834,12 +820,13 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-app.get('/', (req, res) => {
+// حماية مسارات الواجهة
+app.get('*', (req, res) => {
     const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
     } else {
-        res.status(404).send("Error: index.html was not found in public directory.");
+        res.status(404).send("Error: index.html non-existant in public directory.");
     }
 });
 
