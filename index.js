@@ -13,7 +13,7 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // جلب التوكن من متغيّرات بيئة Render
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GSso4c.q9XViHWbU_W4qTrx5hPRhzCTReVyFuxULAK4tU';
 const GUILD_ID = '1517858234378227834';
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
