@@ -28,6 +28,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     currentUser = { username, copyId, approved: data.approved };
 
     if (data.approved) {
+        // إخفاء نافذة الدخول فوراً بدون انتظار
         document.getElementById('loginModal').style.display = 'none';
         document.getElementById('displayLoggedUser').textContent = username;
         document.getElementById('displayLoggedStatus').textContent = `معرّف: ${copyId}`;
