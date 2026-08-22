@@ -12,7 +12,8 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.static('public'));
 
-const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
+// جلب التوكن من متغيّرات بيئة Render
+const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
@@ -43,6 +44,8 @@ let logsHistory = [];
 
 async function fetchGuildMembers() {
     try {
+        if (!client.isReady()) return;
+        
         const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
         if (!guild) return console.log("لم يتم العثور على السيرفر");
 
@@ -73,19 +76,17 @@ async function fetchGuildMembers() {
             }
         });
 
-        console.log(`تم جلب ${allPoliceList.length} عسكري بنجاح.`);
-
         io.emit('policeDataUpdate', {
             allPolice: allPoliceList,
             cadets: cadetsList
         });
 
     } catch (error) {
-        console.error("خطأ أثناء جلب أعضاء السيرفر:", error);
+        console.error("خطأ أثناء جلب أعضاء السيرفر:", error.message);
     }
 }
 
-// التنسيق والتأكيد التلقائي لدخول المسؤول
+// الـ APIs لنظام تسجيل الدخول والتذكر التلقائي
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = activeUsers.find(u => u.copyId === copyId);
@@ -118,11 +119,17 @@ io.on('connection', (socket) => {
 });
 
 client.on('ready', () => {
-    console.log(`تم تسجيل الدخول بالبوت: ${client.user.tag}`);
+    console.log(`[ONLINE] تم تسجيل الدخول بالبوت: ${client.user.tag}`);
     fetchGuildMembers();
     setInterval(fetchGuildMembers, 30000);
 });
 
 const PORT = process.env.PORT || 3000;
-client.login(TOKEN);
+
+if (TOKEN) {
+    client.login(TOKEN).catch(err => console.error("خطأ في تسجيل دخول البوت:", err.message));
+} else {
+    console.error("تنبيه: BOT_TOKEN غير موجود في متغيرات البيئة!");
+}
+
 server.listen(PORT, () => console.log(`السيرفر يعمل على المنفذ ${PORT}`));
