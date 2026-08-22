@@ -442,7 +442,6 @@ async function fetchOldPointsMessages() {
     }
 }
 
-// تشغيل جلب الرسائل القديمة في الخلفية لعدم تجميد السيرفر
 client.once('ready', async () => {
     console.log(`🤖 Bot online as ${client.user.tag}`);
     await loadCloudData();
@@ -457,7 +456,6 @@ client.once('ready', async () => {
         io.emit("cadetsUpdate", cadetsData);
         io.emit("usersUpdate", users);
 
-        // تشغيل عملية جلب البيانات القديمة بدون تعطيل البوت
         (async () => {
             console.log("🔄 Syncing old messages in background...");
             await fetchOldHoursMessages();
@@ -820,13 +818,23 @@ setInterval(() => {
     if (updated) io.emit("usersUpdate", users);
 }, 15000);
 
-// حماية مسارات الواجهة
-app.get('*', (req, res) => {
+// توجيه المسار الرئيسي بشكل مباشر
+app.get('/', (req, res) => {
     const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
     } else {
         res.status(404).send("Error: index.html non-existant in public directory.");
+    }
+});
+
+// التعامل مع جميع باقي المسارات دون التعارض مع Express (استبدال app.get('*'))
+app.use((req, res) => {
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        res.status(404).send("Error: Page not found.");
     }
 });
 
