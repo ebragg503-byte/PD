@@ -1,77 +1,112 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<title>Cadet Tracker | Login</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<style>
-body {
-    background:#0b0f19;
-    color:white;
-    font-family:'Tajawal',sans-serif;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-}
-.login-box {
-    background:#131b2e;
-    padding:30px;
-    border-radius:15px;
-    width:350px;
-    text-align:center;
-    border:1px solid rgba(255,255,255,0.1);
-}
-input {
-    width:100%;
-    padding:12px;
-    margin-top:10px;
-    border-radius:10px;
-    border:none;
-    background:#0f172a;
-    color:white;
-}
-button {
-    width:100%;
-    padding:12px;
-    margin-top:15px;
-    background:#38bdf8;
-    border:none;
-    border-radius:10px;
-    font-weight:700;
-    cursor:pointer;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحكم LSPD - إدارة العسكريين</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --accent-blue: #0284c7;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+            --border-color: #334155;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: var(--bg-dark); color: var(--text-main); padding: 20px; min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border-color); margin-bottom: 25px; }
+        .logo-title { display: flex; align-items: center; gap: 12px; }
+        .logo-title i { font-size: 2rem; color: #38bdf8; }
+        .logo-title h1 { font-size: 1.8rem; color: #38bdf8; }
+
+        .grid-container { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        
+        .card { background-color: var(--card-bg); border-radius: 10px; padding: 20px; border: 1px solid var(--border-color); box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
+        .card-title { font-size: 1.3rem; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px 15px; text-align: right; border-bottom: 1px solid var(--border-color); }
+        th { background-color: var(--accent-blue); color: #fff; font-weight: 600; }
+        tr:hover { background-color: #283548; }
+
+        .wing-tag { background-color: #0369a1; color: #e0f2fe; padding: 4px 10px; border-radius: 20px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 5px; margin: 2px; }
+        .rank-badge { background-color: #334155; padding: 4px 8px; border-radius: 4px; font-weight: bold; color: #38bdf8; }
+    </style>
 </head>
 <body>
+    <div class="container">
+        <header>
+            <div class="logo-title">
+                <i class="fa-solid fa-shield-halved"></i>
+                <h1>لوحة تحكم LSPD</h1>
+            </div>
+        </header>
 
-<div class="login-box">
-    <h2><i class="fa-brands fa-discord"></i> Discord Login</h2>
-    <input id="username" placeholder="Discord Username">
-    <input id="discordId" placeholder="Discord ID">
-    <button onclick="requestAccess()">Request Access</button>
-</div>
+        <div class="grid-container">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><i class="fa-solid fa-users"></i> قائمة العسكريين والضباط</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>الاسم</th>
+                            <th>الرتبة</th>
+                            <th>الساعات</th>
+                            <th>النقاط</th>
+                            <th>الوينقات والتخصصات</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cadetsTable">
+                        <tr><td colspan="5" style="text-align: center;">جاري تحميل البيانات...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
-<script>
-async function requestAccess() {
-    const username = document.getElementById('username').value;
-    const discordId = document.getElementById('discordId').value;
+    <script>
+        const socket = io();
 
-    const res = await fetch('/api/request-access', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ username, discordId })
-    });
+        // قاموس ترجمة الوينقات للأيقونات والأسماء الكاملة
+        const wingsMap = {
+            'swat': { name: 'قوات SWAT', icon: 'fa-user-ninja' },
+            'air': { name: 'الطيران العمودي', icon: 'fa-helicopter' },
+            'k9': { name: 'وحدة K-9', icon: 'fa-dog' },
+            'traffic': { name: 'المرور والسير', icon: 'fa-car' },
+            'investigation': { name: 'التحقيقات CID', icon: 'fa-magnifying-glass' },
+            'academy': { name: 'مدرب الأكاديمية', icon: 'fa-graduation-cap' }
+        };
 
-    const data = await res.json();
+        socket.on('cadetsUpdate', (cadets) => {
+            const tbody = document.getElementById('cadetsTable');
+            tbody.innerHTML = '';
 
-    if (data.exists) {
-        window.location.href = "/dashboard";
-    } else {
-        alert("Your request has been sent. Wait for approval.");
-    }
-}
-</script>
+            cadets.forEach(c => {
+                const wingsHtml = (c.wings || []).map(w => {
+                    const info = wingsMap[w] || { name: w, icon: 'fa-award' };
+                    return `<span class="wing-tag"><i class="fa-solid ${info.icon}"></i> ${info.name}</span>`;
+                }).join(' ');
 
+                const row = `
+                    <tr>
+                        <td><b>${c.name}</b></td>
+                        <td><span class="rank-badge">${c.rank}</span></td>
+                        <td>${c.hours} ساعة</td>
+                        <td>${c.points} نقطة</td>
+                        <td>${wingsHtml || '<span style="color: #64748b;">لا يوجد</span>'}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        });
+    </script>
 </body>
 </html>
