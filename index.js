@@ -12,20 +12,18 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.static('public'));
 
-// إعدادات البوت والدسكورد
-const TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
+// جلب التوكن والمعرفات من بيئة العمل Render أو القيم الافتراضية
+const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
 const GUILD_ID = '1517858234378227834';
 
-// معرفات الرتب
-const POLICE_ROLE_ID = "1520526844313469080"; // جميع أفراد الشرطة
+const POLICE_ROLE_ID = "1520526844313469080"; 
 const CADET_ROLE_IDS = [
-    "1520526818225164329", // أكاديت
-    "1522994966597468191"  // سولو كاديت
+    "1520526818225164329", 
+    "1522994966597468191"  
 ];
 
-// قائمة IDs المسؤولين المقبولين تلقائياً (Admins)
 const ADMIN_IDS = [
-    "771747917040058388" // ID حسابك
+    "771747917040058388" 
 ];
 
 const client = new Client({
@@ -37,7 +35,6 @@ const client = new Client({
     ]
 });
 
-// قواعد البيانات المحلية
 const DB_FILE = path.join(__dirname, 'database.json');
 let dbData = {};
 if (fs.existsSync(DB_FILE)) {
@@ -45,21 +42,11 @@ if (fs.existsSync(DB_FILE)) {
 }
 
 function saveData() {
-    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2));
+    try { fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2)); } catch(e) { console.error(e); }
 }
 
 let activeUsers = [];
 let logsHistory = [];
-
-// قائمة الوينقات المتاحة
-const availableWings = [
-    { id: 'airship', name: 'طيران (Airship)', icon: 'fa-plane' },
-    { id: 'swat', name: 'تدخل سريع (SWAT)', icon: 'fa-shield-heart' },
-    { id: 'field_instructor', name: 'مدرب ميداني', icon: 'fa-chalkboard-user' },
-    { id: 'bureau_investigation', name: 'تحقيقات (CID)', icon: 'fa-magnifying-glass' }
-];
-
-app.get('/api/wings-list', (req, res) => res.json(availableWings));
 
 async function fetchGuildMembers() {
     try {
@@ -72,11 +59,11 @@ async function fetchGuildMembers() {
         members.forEach(member => {
             if (member.user.bot) return;
 
-            // التحقق من وجود رتبة الشرطة العامة
+            // التأكد من وجود رتبة الشرطة
             if (member.roles.cache.has(POLICE_ROLE_ID)) {
                 const cadetData = {
                     discordId: member.id,
-                    name: member.displayName || member.user.username, // استخدام اسم السيرفر بدقة
+                    name: member.displayName || member.user.username,
                     rank: member.roles.highest.name,
                     hours: dbData[member.id]?.hours || 0,
                     points: dbData[member.id]?.points || 0,
@@ -84,10 +71,8 @@ async function fetchGuildMembers() {
                     reports: dbData[member.id]?.reports || []
                 };
 
-                // إضافة القائمة العامة
                 allPoliceList.push(cadetData);
 
-                // إضافة لقائمة الكاديت إذا كان يملك إحدى رتب الكاديت/سولو كاديت
                 const isCadet = member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id));
                 if (isCadet) {
                     cadetsList.push(cadetData);
@@ -105,12 +90,11 @@ async function fetchGuildMembers() {
     }
 }
 
-// طلبات الدخول والـ APIs
+// طلب التسجيل أو التحقق السريع من الجلسة
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = activeUsers.find(u => u.copyId === copyId);
     
-    // إذا كان المستخدم هو الأدمن يتم قبوله فوراً تلقائياً
     const isAutoApproved = ADMIN_IDS.includes(copyId);
 
     if (!user) {
@@ -123,7 +107,19 @@ app.post('/api/login-request', (req, res) => {
     }
     
     io.emit('usersUpdate', activeUsers);
-    res.json({ approved: user.approved });
+    res.json({ approved: user.approved, copyId: user.copyId, username: user.username });
+});
+
+app.post('/api/check-session', (req, res) => {
+    const { copyId } = req.body;
+    const user = activeUsers.find(u => u.copyId === copyId);
+    if (user && user.approved) {
+        return res.json({ approved: true, user });
+    }
+    if (ADMIN_IDS.includes(copyId)) {
+        return res.json({ approved: true, user: { copyId, approved: true } });
+    }
+    res.json({ approved: false });
 });
 
 app.post('/api/user-heartbeat', (req, res) => {
@@ -187,22 +183,19 @@ app.post('/api/update-cadet', (req, res) => {
     res.sendStatus(200);
 });
 
-// فحص الخمول كل 30 ثانية
-setInterval(() => {
-    const now = Date.now();
-    activeUsers.forEach(u => {
-        if (now - u.lastSeen > 40000) {
-            u.status = 'no-active';
-        }
-    });
-    io.emit('usersUpdate', activeUsers);
-}, 30000);
+// إرسال البيانات المباشرة فور اتصال أي عميل
+io.on('connection', (socket) => {
+    fetchGuildMembers();
+    socket.emit('usersUpdate', activeUsers);
+    socket.emit('logsUpdate', logsHistory);
+});
 
 client.on('ready', () => {
     console.log(`تم تسجيل الدخول بالبوت: ${client.user.tag}`);
     fetchGuildMembers();
-    setInterval(fetchGuildMembers, 60000);
+    setInterval(fetchGuildMembers, 30000);
 });
 
+const PORT = process.env.PORT || 3000;
 client.login(TOKEN);
-server.listen(3000, () => console.log('السيرفر يعمل على المنفذ 3000'));
+server.listen(PORT, () => console.log(`السيرفر يعمل على المنفذ ${PORT}`));
