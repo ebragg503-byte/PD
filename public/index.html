@@ -65,7 +65,6 @@
 
         .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 6px; }
         .status-active { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
-        .status-sleep { background-color: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber); }
         .status-no-active { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
 
         .badge-status { padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; }
@@ -128,7 +127,7 @@
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(56, 189, 248, 0.15); color: var(--accent-blue);"><i class="fa-solid fa-users"></i></div>
-                <div><h3 id="statTotal">0</h3><p style="font-size: 12px; color: var(--text-secondary);">إجمالي العسكريين</p></div>
+                <div><h3 id="statTotal">0</h3><p style="font-size: 12px; color: var(--text-secondary);">إجمالي أفراد الشرطة</p></div>
             </div>
             <div class="stat-card">
                 <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green);"><i class="fa-solid fa-clock"></i></div>
@@ -141,13 +140,15 @@
         </div>
 
         <div class="nav-tabs">
-            <button class="tab-btn active" onclick="switchView('cadets', this)"><i class="fa-solid fa-user-shield"></i> قائمة العسكريين</button>
+            <button class="tab-btn active" onclick="switchView('allPolice', this)"><i class="fa-solid fa-user-shield"></i> جميع أفراد الشرطة</button>
+            <button class="tab-btn" onclick="switchView('cadetsOnly', this)"><i class="fa-solid fa-graduation-cap"></i> الأكاديت والـ Solo Cadet</button>
             <button class="tab-btn" onclick="switchView('users', this)"><i class="fa-solid fa-users-viewfinder"></i> المتواجدون بالموقع</button>
             <button class="tab-btn" onclick="switchView('approval', this)"><i class="fa-solid fa-user-check"></i> طلبات الموافقة</button>
             <button class="tab-btn" onclick="switchView('logs', this)"><i class="fa-solid fa-scroll"></i> سجل التعديلات (Logs)</button>
         </div>
 
-        <div id="viewCadets" class="table-card">
+        <!-- جدول جميع أفراد الشرطة -->
+        <div id="viewAllPolice" class="table-card">
             <table>
                 <thead>
                     <tr>
@@ -160,7 +161,25 @@
                         <th style="text-align: center;">إجراءات</th>
                     </tr>
                 </thead>
-                <tbody id="cadetsTableBody"></tbody>
+                <tbody id="allPoliceTableBody"></tbody>
+            </table>
+        </div>
+
+        <!-- جدول الأكاديت والسولو كاديت فقط -->
+        <div id="viewCadetsOnly" class="table-card" style="display: none;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>اسم الكاديت</th>
+                        <th>الرتبة</th>
+                        <th>الساعات</th>
+                        <th>النقاط</th>
+                        <th>الوينقات المكتسبة</th>
+                        <th>التقارير</th>
+                        <th style="text-align: center;">إجراءات</th>
+                    </tr>
+                </thead>
+                <tbody id="cadetsOnlyTableBody"></tbody>
             </table>
         </div>
 
@@ -206,6 +225,7 @@
         </div>
     </div>
 
+    <!-- Modals -->
     <div class="modal-overlay" id="editModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
@@ -248,7 +268,7 @@
     <div class="modal-overlay" id="wingsModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="wingsModalTitle">الوينقات المكتسبة</h3>
+                <h3>الوينقات المكتسبة</h3>
                 <button onclick="closeModal('wingsModal')" style="background:none; border:none; color:#fff; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div id="wingsListDetails" style="display:flex; flex-direction:column; gap:10px;"></div>
@@ -258,7 +278,7 @@
     <div class="modal-overlay" id="reportsModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="reportsModalTitle">تقارير العسكري</h3>
+                <h3>تقارير العسكري</h3>
                 <button onclick="closeModal('reportsModal')" style="background:none; border:none; color:#fff; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div id="reportsListDetails" style="max-height:300px; overflow-y:auto;"></div>
