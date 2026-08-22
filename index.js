@@ -23,6 +23,11 @@ const CADET_ROLE_IDS = [
     "1522994966597468191"  // سولو كاديت
 ];
 
+// قائمة IDs المسؤولين المقبولين تلقائياً (Admins)
+const ADMIN_IDS = [
+    "771747917040058388" // ID حسابك
+];
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -104,13 +109,19 @@ async function fetchGuildMembers() {
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = activeUsers.find(u => u.copyId === copyId);
+    
+    // إذا كان المستخدم هو الأدمن يتم قبوله فوراً تلقائياً
+    const isAutoApproved = ADMIN_IDS.includes(copyId);
+
     if (!user) {
-        user = { username, copyId, approved: false, status: 'active', lastSeen: Date.now() };
+        user = { username, copyId, approved: isAutoApproved, status: 'active', lastSeen: Date.now() };
         activeUsers.push(user);
     } else {
         user.username = username;
+        if (isAutoApproved) user.approved = true;
         user.lastSeen = Date.now();
     }
+    
     io.emit('usersUpdate', activeUsers);
     res.json({ approved: user.approved });
 });
