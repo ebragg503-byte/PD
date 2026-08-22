@@ -17,8 +17,23 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
-const CADET_ROLE_ID = '1520526818225164329';
-const SOLO_CADET_ROLE_ID = '1522994966597468191';
+
+// 1. مصفوفة رتب LSPD مصفوفة بالأوزان لترتيبها تلقائياً
+// 💡 ملاحظة: استبدل ROLE_ID_HERE بايديات الرتب الحقيقية في سيرفر الديسكورد
+const LSPD_RANKS = [
+    { id: '1520526818225164329', name: 'Cadet', weight: 1 },
+    { id: '1522994966597468191', name: 'Solo Cadet', weight: 2 },
+    { id: '1520526816832524402', name: 'Officer I', weight: 3 },
+    { id: '1520526816215826634', name: 'Officer II', weight: 4 },
+    { id: '1520526814835900439', name: 'Officer III', weight: 5 },
+    { id: '1520526814231920680', name: 'Senior Officer', weight: 6 },
+    { id: '1520526813011513557', name: 'Senior Lead Officer', weight: 7 },
+    { id: '1520526810113245326', name: 'Sergeant', weight: 8 },
+    { id: '1520526809106612428', name: 'First Sergeant', weight: 9 },
+    { id: '1520526808154509442', name: 'Staff Sergeant', weight: 10 },
+    { id: '1520526806313078976', name: 'Lieutenant', weight: 11 },
+    { id: '1520526805226754109', name: 'First Lieutenant', weight: 12 }
+];
 
 const REPORTS_CHANNEL_ID = '1536506668039274556'; 
 const HOURS_CHANNEL_ID = '1530564311217471639';
@@ -39,10 +54,15 @@ let cadetsData = [];
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// ترتيب الأفراد حسب أوزان الرتب ثم الرقم الوظيفي/الاسم
 function sortCadets() {
     cadetsData.sort((a, b) => {
-        if (a.rank === 'Solo Cadet' && b.rank !== 'Solo Cadet') return -1;
-        if (a.rank !== 'Solo Cadet' && b.rank === 'Solo Cadet') return 1;
+        const rankA = LSPD_RANKS.find(r => r.name === a.rank)?.weight || 0;
+        const rankB = LSPD_RANKS.find(r => r.name === b.rank)?.weight || 0;
+
+        if (rankA !== rankB) {
+            return rankA - rankB; // ترتيب من Cadet إلى First Lieutenant
+        }
 
         const numA = parseInt((a.name.match(/\d+/) || [0])[0]);
         const numB = parseInt((b.name.match(/\d+/) || [0])[0]);
@@ -208,24 +228,25 @@ function parseDutyMessage(message) {
     return { discordId, callsign, charName, totalHours };
 }
 
+// مزامنة كافة أعضاء سيرفر LSPD
 function syncMember(member) {
-    const isCadet = member.roles.cache.has(CADET_ROLE_ID);
-    const isSolo = member.roles.cache.has(SOLO_CADET_ROLE_ID);
+    const userRanks = LSPD_RANKS.filter(r => member.roles.cache.has(r.id));
+    const highestRank = userRanks.sort((a, b) => b.weight - a.weight)[0];
+
     const index = cadetsData.findIndex(c => c.discordId === member.id);
 
-    if (isCadet || isSolo) {
-        const rank = isSolo ? 'Solo Cadet' : 'Cadet';
+    if (highestRank) {
         const name = member.displayName || member.user.username;
 
         if (index !== -1) {
             cadetsData[index].name = name;
-            cadetsData[index].rank = rank;
+            cadetsData[index].rank = highestRank.name;
             cadetsData[index].status = 'active';
         } else {
             cadetsData.push({
                 discordId: member.id,
                 name: name,
-                rank: rank,
+                rank: highestRank.name,
                 hours: 0,
                 points: 0,
                 reports: [],
@@ -440,6 +461,7 @@ function processPointsMessage(msg, emitUpdate = true) {
     }
 }
 
+// ⚠️ تعديل ترتيب التشغيل لمنع فقدان البيانات واكتمال جلب القوائم قبل إرسال التحديث
 client.once('ready', async () => {
     console.log(`🤖 Bot online as ${client.user.tag}`);
     await loadCloudData();
@@ -450,13 +472,13 @@ client.once('ready', async () => {
         
         members.forEach(m => syncMember(m));
 
-        sortCadets();
-        io.emit("cadetsUpdate", cadetsData);
-        io.emit("usersUpdate", users);
-
         await fetchOldHoursMessages();
         await fetchOldPointsMessages();
         await fetchOldReportsMessages();
+
+        sortCadets();
+        io.emit("cadetsUpdate", cadetsData);
+        io.emit("usersUpdate", users);
 
     } catch (e) {
         console.error("Sync error:", e);
