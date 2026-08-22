@@ -1,271 +1,216 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة أكاديمية العسكريين</title>
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
 
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 
-    <style>
-        :root {
-            --bg-main: #0b0f19;
-            --card-bg: rgba(22, 30, 49, 0.7);
-            --card-border: rgba(255, 255, 255, 0.08);
-            --accent-blue: #38bdf8;
-            --accent-indigo: #6366f1;
-            --accent-green: #10b981;
-            --accent-amber: #f59e0b;
-            --accent-red: #ef4444;
-            --text-primary: #f3f4f6;
-            --text-secondary: #9ca3af;
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// سلم رتب LSPD مع الأوزان للفرز (الرتب الأعلى تظهر أولاً)
+const RANK_WEIGHTS = {
+    'Chief of Police': 110,
+    'Assistant Chief': 100,
+    'Deputy Chief': 90,
+    'Captain': 80,
+    'Lieutenant': 70,
+    'Staff Sergeant': 60,
+    'First Sergeant': 50,
+    'Sergeant': 40,
+    'Senior Lead Officer': 30,
+    'Officer III': 25,
+    'Officer II': 20,
+    'Officer I': 15,
+    'Cadet': 10
+};
+
+// بيانات الوينقات المتاحة
+const availableWings = [
+    { id: 'swat', name: 'قوات SWAT', icon: 'fa-user-ninja' },
+    { id: 'air', name: 'الطيران العمودي (Air Unit)', icon: 'fa-helicopter' },
+    { id: 'k9', name: 'وحدة K-9', icon: 'fa-dog' },
+    { id: 'traffic', name: 'المرور والسير', icon: 'fa-car' },
+    { id: 'investigation', name: 'التحقيقات CID', icon: 'fa-magnifying-glass' },
+    { id: 'academy', name: 'مدرب الأكاديمية', icon: 'fa-graduation-cap' }
+];
+
+// قاعدة بيانات مؤقتة في الذاكرة (Memory DB)
+let cadets = [
+    {
+        discordId: '1001',
+        name: 'Ebrahem Derbah',
+        rank: 'First Sergeant',
+        hours: 45.5,
+        points: 120,
+        wings: ['swat', 'air', 'academy'],
+        reports: [{ title: 'تقرير دورية', content: 'تم ضبط مخالفات في السرعة', date: '2026-08-22' }]
+    },
+    {
+        discordId: '1002',
+        name: 'John Doe',
+        rank: 'Cadet',
+        hours: 12.0,
+        points: 30,
+        wings: ['traffic'],
+        reports: []
+    }
+];
+
+let users = [];
+let logs = [];
+
+// دالة فرز العسكريين حسب وزن الرتبة
+function sortCadets(data) {
+    return data.sort((a, b) => {
+        const weightA = RANK_WEIGHTS[a.rank] || 0;
+        const weightB = RANK_WEIGHTS[b.rank] || 0;
+        return weightB - weightA;
+    });
+}
+
+// REST APIs
+
+app.get('/api/wings-list', (req, res) => {
+    res.json(availableWings);
+});
+
+app.get('/api/cadets', (req, res) => {
+    res.json(sortCadets(cadets));
+});
+
+app.get('/api/users', (req, res) => {
+    res.json(users);
+});
+
+app.get('/api/logs', (req, res) => {
+    res.json(logs);
+});
+
+app.post('/api/login-request', (req, res) => {
+    const { username, copyId } = req.body;
+    let user = users.find(u => u.copyId === copyId);
+
+    if (!user) {
+        user = {
+            username,
+            copyId,
+            approved: false,
+            role: 'viewer',
+            status: 'active',
+            lastSeen: Date.now()
+        };
+        users.push(user);
+    } else {
+        user.username = username;
+        user.lastSeen = Date.now();
+    }
+
+    io.emit('usersUpdate', users);
+    res.json({ approved: user.approved, role: user.role });
+});
+
+app.post('/api/user-heartbeat', (req, res) => {
+    const { copyId, status } = req.body;
+    const user = users.find(u => u.copyId === copyId);
+    if (user) {
+        user.status = status;
+        user.lastSeen = Date.now();
+        io.emit('usersUpdate', users);
+    }
+    res.sendStatus(200);
+});
+
+app.post('/api/approve-user', (req, res) => {
+    const { copyId, approve, adminName } = req.body;
+    const userIndex = users.findIndex(u => u.copyId === copyId);
+
+    if (userIndex !== -1) {
+        const targetUser = users[userIndex];
+        if (approve) {
+            targetUser.approved = true;
+            logs.unshift({
+                by: adminName || 'Admin',
+                action: 'موافقة على دخول المستخدم',
+                target: targetUser.username,
+                time: new Date().toLocaleString('ar-SA')
+            });
+        } else {
+            users.splice(userIndex, 1);
+            logs.unshift({
+                by: adminName || 'Admin',
+                action: 'رفض طلب دخول',
+                target: targetUser.username,
+                time: new Date().toLocaleString('ar-SA')
+            });
+        }
+        io.emit('usersUpdate', users);
+        io.emit('logsUpdate', logs);
+    }
+    res.json({ success: true });
+});
+
+app.post('/api/update-cadet', (req, res) => {
+    const { discordId, hours, points, wings, reportTitle, reportContent, editedBy } = req.body;
+    const cadet = cadets.find(c => c.discordId === discordId);
+
+    if (cadet) {
+        cadet.hours = parseFloat(hours) || 0;
+        cadet.points = parseInt(points) || 0;
+        cadet.wings = wings || [];
+
+        if (reportTitle && reportContent) {
+            if (!cadet.reports) cadet.reports = [];
+            cadet.reports.push({
+                title: reportTitle,
+                content: reportContent,
+                date: new Date().toISOString().split('T')[0]
+            });
         }
 
-        * { box-sizing: border-box; font-family: 'Tajawal', sans-serif; margin: 0; padding: 0; }
+        logs.unshift({
+            by: editedBy || 'Admin',
+            action: 'تعديل بيانات ورتبة/ساعات العسكري',
+            target: cadet.name,
+            time: new Date().toLocaleString('ar-SA')
+        });
 
-        body {
-            background-color: var(--bg-main);
-            background-image: 
-                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(99, 102, 241, 0.12) 0px, transparent 50%);
-            color: var(--text-primary);
-            min-height: 100vh;
-            padding: 20px;
+        const sorted = sortCadets(cadets);
+        io.emit('cadetsUpdate', sorted);
+        io.emit('logsUpdate', logs);
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: 'Cadet not found' });
+    }
+});
+
+// إعداد الاتصال التفاعلي عبر Socket.IO
+io.on('connection', (socket) => {
+    socket.emit('cadetsUpdate', sortCadets(cadets));
+    socket.emit('usersUpdate', users);
+    socket.emit('logsUpdate', logs);
+});
+
+// فحص عدم النشاط للتحقق من حالة المستخدمين كل 30 ثانية
+setInterval(() => {
+    const now = Date.now();
+    let updated = false;
+
+    users.forEach(u => {
+        if (now - u.lastSeen > 120000 && u.status !== 'no-active') {
+            u.status = 'no-active';
+            updated = true;
         }
+    });
 
-        .container { max-width: 1400px; margin: 0 auto; }
+    if (updated) {
+        io.emit('usersUpdate', users);
+    }
+}, 30000);
 
-        .navbar {
-            display: flex; justify-content: space-between; align-items: center;
-            background: var(--card-bg); backdrop-filter: blur(12px);
-            border: 1px solid var(--card-border); padding: 18px 25px; border-radius: 16px; margin-bottom: 25px;
-        }
-
-        .brand { display: flex; align-items: center; gap: 15px; }
-        .brand i { font-size: 28px; color: var(--accent-blue); background: rgba(56, 189, 248, 0.1); padding: 12px; border-radius: 12px; }
-
-        .user-info-box { display: flex; align-items: center; gap: 15px; background: rgba(0,0,0,0.3); padding: 8px 16px; border-radius: 12px; }
-
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
-        .stat-card { background: var(--card-bg); border: 1px solid var(--card-border); padding: 18px; border-radius: 16px; display: flex; align-items: center; gap: 15px; }
-        .stat-icon { width: 45px; height: 45px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
-
-        .nav-tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--card-border); padding-bottom: 10px; flex-wrap: wrap; }
-        .tab-btn { background: rgba(255,255,255,0.05); color: var(--text-secondary); border: none; padding: 10px 18px; border-radius: 10px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; }
-        .tab-btn.active { background: var(--accent-blue); color: #000; }
-
-        .table-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; text-align: right; }
-        th, td { padding: 16px 20px; border-bottom: 1px solid var(--card-border); font-size: 14px; }
-        th { background: rgba(15, 23, 42, 0.8); color: var(--text-secondary); }
-
-        .badge-wings { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); padding: 5px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s; font-weight: bold; }
-        .badge-wings:hover { background: var(--accent-indigo); color: #fff; }
-
-        .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 6px; }
-        .status-active { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
-        .status-sleep { background-color: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber); }
-        .status-no-active { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
-
-        .badge-status { padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; }
-
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 999; }
-        .modal-card { background: #131b2e; border: 1px solid var(--card-border); border-radius: 16px; width: 500px; max-width: 90%; padding: 25px; }
-
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-secondary); }
-        .form-group input, .form-group textarea { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; outline: none; }
-
-        .wings-checkboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; }
-        .wings-checkboxes label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: #fff; }
-
-        .btn { padding: 10px 18px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
-        .btn-primary { background: var(--accent-blue); color: #000; }
-        .btn-danger { background: var(--accent-red); color: #fff; }
-        .btn-success { background: var(--accent-green); color: #fff; }
-    </style>
-</head>
-<body>
-
-    <div class="modal-overlay" id="loginModal" style="display: flex;">
-        <div class="modal-card" style="text-align: center;">
-            <i class="fa-solid fa-shield-cat" style="font-size: 45px; color: var(--accent-blue); margin-bottom: 15px;"></i>
-            <h2>تسجيل الدخول للنظام</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 13px;">يرجى إدخال اسمك والدس كورد كوبي أي دي للاستمرار</p>
-            
-            <form id="loginForm">
-                <div class="form-group">
-                    <input type="text" id="loginUsername" placeholder="اسمك في الدسكورد" required>
-                </div>
-                <div class="form-group">
-                    <input type="text" id="loginCopyId" placeholder="Discord Copy ID" required>
-                </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%;">طلب الدخول</button>
-            </form>
-            <div id="loginStatus" style="margin-top: 15px; font-size: 13px;"></div>
-        </div>
-    </div>
-
-    <div class="container">
-        <div class="navbar">
-            <div class="brand">
-                <i class="fa-solid fa-shield-halved"></i>
-                <div>
-                    <h1>نظام إدارة الأكاديمية</h1>
-                    <p>تتبع العسكريين، النقاط، الوينقات، والحضور</p>
-                </div>
-            </div>
-            <div class="user-info-box">
-                <i class="fa-solid fa-user-check" style="color: var(--accent-green);"></i>
-                <div>
-                    <div id="displayLoggedUser" style="font-weight: bold; font-size: 14px;">غير مسجل</div>
-                    <div id="displayLoggedStatus" style="font-size: 11px; color: var(--text-secondary);">معرّف: -</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon" style="background: rgba(56, 189, 248, 0.15); color: var(--accent-blue);"><i class="fa-solid fa-users"></i></div>
-                <div><h3 id="statTotal">0</h3><p style="font-size: 12px; color: var(--text-secondary);">إجمالي العسكريين</p></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green);"><i class="fa-solid fa-clock"></i></div>
-                <div><h3 id="statHours">0</h3><p style="font-size: 12px; color: var(--text-secondary);">إجمالي الساعات</p></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: var(--accent-amber);"><i class="fa-solid fa-star"></i></div>
-                <div><h3 id="statPoints">0</h3><p style="font-size: 12px; color: var(--text-secondary);">إجمالي النقاط</p></div>
-            </div>
-        </div>
-
-        <div class="nav-tabs">
-            <button class="tab-btn active" onclick="switchView('cadets', this)"><i class="fa-solid fa-user-shield"></i> قائمة العسكريين</button>
-            <button class="tab-btn" onclick="switchView('users', this)"><i class="fa-solid fa-users-viewfinder"></i> المتواجدون بالموقع</button>
-            <button class="tab-btn" onclick="switchView('approval', this)"><i class="fa-solid fa-user-check"></i> طلبات الموافقة</button>
-            <button class="tab-btn" onclick="switchView('logs', this)"><i class="fa-solid fa-scroll"></i> سجل التعديلات (Logs)</button>
-        </div>
-
-        <div id="viewCadets" class="table-card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>اسم العسكري</th>
-                        <th>الرتبة</th>
-                        <th>الساعات</th>
-                        <th>النقاط</th>
-                        <th>الوينقات المكتسبة</th>
-                        <th>التقارير</th>
-                        <th style="text-align: center;">إجراءات</th>
-                    </tr>
-                </thead>
-                <tbody id="cadetsTableBody"></tbody>
-            </table>
-        </div>
-
-        <div id="viewUsers" class="table-card" style="display: none;">
-            <table>
-                <thead>
-                    <tr>
-                        <th>اسم المستخدم</th>
-                        <th>Copy ID</th>
-                        <th>الحالة بالموقع</th>
-                        <th>الموافقة</th>
-                    </tr>
-                </thead>
-                <tbody id="usersTableBody"></tbody>
-            </table>
-        </div>
-
-        <div id="viewApproval" class="table-card" style="display: none;">
-            <table>
-                <thead>
-                    <tr>
-                        <th>اسم المستخدم</th>
-                        <th>Discord Copy ID</th>
-                        <th style="text-align: center;">القرار</th>
-                    </tr>
-                </thead>
-                <tbody id="approvalTableBody"></tbody>
-            </table>
-        </div>
-
-        <div id="viewLogs" class="table-card" style="display: none;">
-            <table>
-                <thead>
-                    <tr>
-                        <th>من عدّل؟</th>
-                        <th>الإجراء / التعديل</th>
-                        <th>المستهدف</th>
-                        <th>التاريخ والوقت</th>
-                    </tr>
-                </thead>
-                <tbody id="logsTableBody"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="modal-overlay" id="editModal">
-        <div class="modal-card">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="editModalTitle">تعديل بيانات العسكري</h3>
-                <button onclick="closeModal('editModal')" style="background:none; border:none; color:#fff; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <form id="editForm">
-                <input type="hidden" id="editDiscordId">
-                
-                <div class="form-group">
-                    <label>الساعات:</label>
-                    <input type="number" step="0.5" id="editHours">
-                </div>
-
-                <div class="form-group">
-                    <label>النقاط:</label>
-                    <input type="number" id="editPoints">
-                </div>
-
-                <div class="form-group">
-                    <label>الوينقات (Wings):</label>
-                    <div class="wings-checkboxes" id="wingsContainer"></div>
-                </div>
-
-                <div style="border-top:1px solid var(--card-border); padding-top:10px; margin-top:10px;">
-                    <label style="color:var(--accent-amber); font-weight:bold; font-size:13px;">إضافة تقرير MDT يدوي:</label>
-                    <div class="form-group" style="margin-top:5px;">
-                        <input type="text" id="editReportTitle" placeholder="عنوان التقرير">
-                    </div>
-                    <div class="form-group">
-                        <textarea id="editReportContent" rows="2" placeholder="تفاصيل التقرير"></textarea>
-                    </div>
-                </div>
-
-                <button type="submit" class="btn btn-primary" style="width: 100%;">حفظ التغييرات</button>
-            </form>
-        </div>
-    </div>
-
-    <div class="modal-overlay" id="wingsModal">
-        <div class="modal-card">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="wingsModalTitle">الوينقات المكتسبة</h3>
-                <button onclick="closeModal('wingsModal')" style="background:none; border:none; color:#fff; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div id="wingsListDetails" style="display:flex; flex-direction:column; gap:10px;"></div>
-        </div>
-    </div>
-
-    <div class="modal-overlay" id="reportsModal">
-        <div class="modal-card">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <h3 id="reportsModalTitle">تقارير العسكري</h3>
-                <button onclick="closeModal('reportsModal')" style="background:none; border:none; color:#fff; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div id="reportsListDetails" style="max-height:300px; overflow-y:auto;"></div>
-        </div>
-    </div>
-
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="script.js"></script>
-</body>
-</html>
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
