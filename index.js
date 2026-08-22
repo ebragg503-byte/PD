@@ -12,8 +12,8 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.static('public'));
 
-// جلب التوكن من متغيّرات بيئة Render
-const TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GSso4c.q9XViHWbU_W4qTrx5hPRhzCTReVyFuxULAK4tU';
+// التوكن والمعرفات
+const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
 const GUILD_ID = '1517858234378227834';
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
@@ -44,12 +44,19 @@ let logsHistory = [];
 
 async function fetchGuildMembers() {
     try {
-        if (!client.isReady()) return;
+        if (!client.isReady()) {
+            console.log("البوت لم يجهز بعد لجلب الأعضاء...");
+            return;
+        }
         
         const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
-        if (!guild) return console.log("لم يتم العثور على السيرفر");
+        if (!guild) {
+            console.log("لم يتم العثور على السيرفر بالـ ID المحدد");
+            return;
+        }
 
         const members = await guild.members.fetch();
+        console.log(`تم جلب ${members.size} عضو من الديسكورد`);
 
         let allPoliceList = [];
         let cadetsList = [];
@@ -76,17 +83,19 @@ async function fetchGuildMembers() {
             }
         });
 
+        console.log(`عدد العسكريين الذين تم العثور عليهم: ${allPoliceList.length}`);
+
         io.emit('policeDataUpdate', {
             allPolice: allPoliceList,
             cadets: cadetsList
         });
 
     } catch (error) {
-        console.error("خطأ أثناء جلب أعضاء السيرفر:", error.message);
+        console.error("خطأ أثناء جلب أعضاء السيرفر:", error);
     }
 }
 
-// الـ APIs لنظام تسجيل الدخول والتذكر التلقائي
+// الـ APIs لنظام الجلسات والتذكر
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = activeUsers.find(u => u.copyId === copyId);
@@ -115,21 +124,27 @@ app.post('/api/check-session', (req, res) => {
 });
 
 io.on('connection', (socket) => {
+    console.log('مستخدم جديد اتصل بالموقع');
     fetchGuildMembers();
 });
 
 client.on('ready', () => {
-    console.log(`[ONLINE] تم تسجيل الدخول بالبوت: ${client.user.tag}`);
+    console.log(`=================================`);
+    console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
+    console.log(`=================================`);
     fetchGuildMembers();
     setInterval(fetchGuildMembers, 30000);
 });
 
+client.on('error', (err) => {
+    console.error("خطأ من ديسكورد:", err);
+});
+
 const PORT = process.env.PORT || 3000;
 
-if (TOKEN) {
-    client.login(TOKEN).catch(err => console.error("خطأ في تسجيل دخول البوت:", err.message));
-} else {
-    console.error("تنبيه: BOT_TOKEN غير موجود في متغيرات البيئة!");
-}
+console.log("جاري محاولة تسجيل دخول البوت...");
+client.login(TOKEN).catch(err => {
+    console.error("فشل تسجيل دخول البوت! السبب:", err.message);
+});
 
 server.listen(PORT, () => console.log(`السيرفر يعمل على المنفذ ${PORT}`));
