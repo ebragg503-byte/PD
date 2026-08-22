@@ -12,19 +12,12 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.static('public'));
 
-// جلب التوكن والمعرفات من بيئة العمل Render أو القيم الافتراضية
 const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
 const GUILD_ID = '1517858234378227834';
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
-const CADET_ROLE_IDS = [
-    "1520526818225164329", 
-    "1522994966597468191"  
-];
-
-const ADMIN_IDS = [
-    "771747917040058388" 
-];
+const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"];
+const ADMIN_IDS = ["771747917040058388"];
 
 const client = new Client({
     intents: [
@@ -42,7 +35,7 @@ if (fs.existsSync(DB_FILE)) {
 }
 
 function saveData() {
-    try { fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2)); } catch(e) { console.error(e); }
+    try { fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2)); } catch(e) {}
 }
 
 let activeUsers = [];
@@ -50,7 +43,9 @@ let logsHistory = [];
 
 async function fetchGuildMembers() {
     try {
-        const guild = await client.guilds.fetch(GUILD_ID);
+        const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
+        if (!guild) return console.log("لم يتم العثور على السيرفر");
+
         const members = await guild.members.fetch();
 
         let allPoliceList = [];
@@ -59,7 +54,6 @@ async function fetchGuildMembers() {
         members.forEach(member => {
             if (member.user.bot) return;
 
-            // التأكد من وجود رتبة الشرطة
             if (member.roles.cache.has(POLICE_ROLE_ID)) {
                 const cadetData = {
                     discordId: member.id,
@@ -73,12 +67,13 @@ async function fetchGuildMembers() {
 
                 allPoliceList.push(cadetData);
 
-                const isCadet = member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id));
-                if (isCadet) {
+                if (member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id))) {
                     cadetsList.push(cadetData);
                 }
             }
         });
+
+        console.log(`تم جلب ${allPoliceList.length} عسكري بنجاح.`);
 
         io.emit('policeDataUpdate', {
             allPolice: allPoliceList,
@@ -90,11 +85,10 @@ async function fetchGuildMembers() {
     }
 }
 
-// طلب التسجيل أو التحقق السريع من الجلسة
+// التنسيق والتأكيد التلقائي لدخول المسؤول
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
     let user = activeUsers.find(u => u.copyId === copyId);
-    
     const isAutoApproved = ADMIN_IDS.includes(copyId);
 
     if (!user) {
@@ -107,87 +101,20 @@ app.post('/api/login-request', (req, res) => {
     }
     
     io.emit('usersUpdate', activeUsers);
-    res.json({ approved: user.approved, copyId: user.copyId, username: user.username });
+    res.json({ approved: user.approved });
 });
 
 app.post('/api/check-session', (req, res) => {
     const { copyId } = req.body;
-    const user = activeUsers.find(u => u.copyId === copyId);
-    if (user && user.approved) {
-        return res.json({ approved: true, user });
-    }
     if (ADMIN_IDS.includes(copyId)) {
-        return res.json({ approved: true, user: { copyId, approved: true } });
+        return res.json({ approved: true });
     }
-    res.json({ approved: false });
-});
-
-app.post('/api/user-heartbeat', (req, res) => {
-    const { copyId } = req.body;
     const user = activeUsers.find(u => u.copyId === copyId);
-    if (user) {
-        user.lastSeen = Date.now();
-        user.status = 'active';
-        io.emit('usersUpdate', activeUsers);
-    }
-    res.sendStatus(200);
+    res.json({ approved: user ? user.approved : false });
 });
 
-app.post('/api/approve-user', (req, res) => {
-    const { copyId, approve, adminName } = req.body;
-    const user = activeUsers.find(u => u.copyId === copyId);
-    if (user) {
-        user.approved = approve;
-        logsHistory.unshift({
-            by: adminName || 'المسؤول',
-            action: approve ? 'قبول دخول المستخدم' : 'رفض دخول المستخدم',
-            target: user.username,
-            time: new Date().toLocaleTimeString('ar-EG')
-        });
-        io.emit('usersUpdate', activeUsers);
-        io.emit('logsUpdate', logsHistory);
-    }
-    res.sendStatus(200);
-});
-
-app.post('/api/update-cadet', (req, res) => {
-    const { discordId, hours, points, wings, reportTitle, reportContent, editedBy } = req.body;
-    
-    if (!dbData[discordId]) {
-        dbData[discordId] = { hours: 0, points: 0, wings: [], reports: [] };
-    }
-
-    dbData[discordId].hours = parseFloat(hours) || 0;
-    dbData[discordId].points = parseInt(points) || 0;
-    dbData[discordId].wings = wings || [];
-
-    if (reportTitle && reportContent) {
-        dbData[discordId].reports.push({
-            title: reportTitle,
-            content: reportContent,
-            date: new Date().toLocaleDateString('ar-EG')
-        });
-    }
-
-    saveData();
-    fetchGuildMembers();
-
-    logsHistory.unshift({
-        by: editedBy || 'مسؤول',
-        action: 'تعديل البيانات / إضافة تقرير',
-        target: `العسكري (ID: ${discordId})`,
-        time: new Date().toLocaleTimeString('ar-EG')
-    });
-    io.emit('logsUpdate', logsHistory);
-
-    res.sendStatus(200);
-});
-
-// إرسال البيانات المباشرة فور اتصال أي عميل
 io.on('connection', (socket) => {
     fetchGuildMembers();
-    socket.emit('usersUpdate', activeUsers);
-    socket.emit('logsUpdate', logsHistory);
 });
 
 client.on('ready', () => {
