@@ -1,216 +1,70 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحكم LSPD</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #0f172a; color: #f8fafc; padding: 20px; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid #334155; margin-bottom: 20px; }
+        h1 { color: #38bdf8; font-size: 1.8rem; }
+        table { width: 100%; border-collapse: collapse; background-color: #1e293b; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px 15px; text-align: right; border-bottom: 1px solid #334155; }
+        th { background-color: #0284c7; color: #fff; }
+        tr:hover { background-color: #334155; }
+        .badge { background-color: #0369a1; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; margin-left: 4px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fa-solid fa-shield-halved"></i> لوحة تحكم LSPD</h1>
+            <a href="/login.html" style="color: #38bdf8; text-decoration: none;"><i class="fa-solid fa-right-to-bracket"></i> تسجيل الدخول</a>
+        </header>
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+        <h2>قائمة العسكريين</h2>
+        <br>
+        <table>
+            <thead>
+                <tr>
+                    <th>الاسم</th>
+                    <th>الرتبة</th>
+                    <th>الساعات</th>
+                    <th>النقاط</th>
+                    <th>الوينقات</th>
+                </tr>
+            </thead>
+            <tbody id="cadetsTable">
+                <tr><td colspan="5" style="text-align: center;">جاري تحميل البيانات...</td></tr>
+            </tbody>
+        </table>
+    </div>
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+    <script>
+        const socket = io();
 
-// سلم رتب LSPD مع الأوزان للفرز (الرتب الأعلى تظهر أولاً)
-const RANK_WEIGHTS = {
-    'Chief of Police': 110,
-    'Assistant Chief': 100,
-    'Deputy Chief': 90,
-    'Captain': 80,
-    'Lieutenant': 70,
-    'Staff Sergeant': 60,
-    'First Sergeant': 50,
-    'Sergeant': 40,
-    'Senior Lead Officer': 30,
-    'Officer III': 25,
-    'Officer II': 20,
-    'Officer I': 15,
-    'Cadet': 10
-};
+        socket.on('cadetsUpdate', (cadets) => {
+            const tbody = document.getElementById('cadetsTable');
+            tbody.innerHTML = '';
 
-// بيانات الوينقات المتاحة
-const availableWings = [
-    { id: 'swat', name: 'قوات SWAT', icon: 'fa-user-ninja' },
-    { id: 'air', name: 'الطيران العمودي (Air Unit)', icon: 'fa-helicopter' },
-    { id: 'k9', name: 'وحدة K-9', icon: 'fa-dog' },
-    { id: 'traffic', name: 'المرور والسير', icon: 'fa-car' },
-    { id: 'investigation', name: 'التحقيقات CID', icon: 'fa-magnifying-glass' },
-    { id: 'academy', name: 'مدرب الأكاديمية', icon: 'fa-graduation-cap' }
-];
-
-// قاعدة بيانات مؤقتة في الذاكرة (Memory DB)
-let cadets = [
-    {
-        discordId: '1001',
-        name: 'Ebrahem Derbah',
-        rank: 'First Sergeant',
-        hours: 45.5,
-        points: 120,
-        wings: ['swat', 'air', 'academy'],
-        reports: [{ title: 'تقرير دورية', content: 'تم ضبط مخالفات في السرعة', date: '2026-08-22' }]
-    },
-    {
-        discordId: '1002',
-        name: 'John Doe',
-        rank: 'Cadet',
-        hours: 12.0,
-        points: 30,
-        wings: ['traffic'],
-        reports: []
-    }
-];
-
-let users = [];
-let logs = [];
-
-// دالة فرز العسكريين حسب وزن الرتبة
-function sortCadets(data) {
-    return data.sort((a, b) => {
-        const weightA = RANK_WEIGHTS[a.rank] || 0;
-        const weightB = RANK_WEIGHTS[b.rank] || 0;
-        return weightB - weightA;
-    });
-}
-
-// REST APIs
-
-app.get('/api/wings-list', (req, res) => {
-    res.json(availableWings);
-});
-
-app.get('/api/cadets', (req, res) => {
-    res.json(sortCadets(cadets));
-});
-
-app.get('/api/users', (req, res) => {
-    res.json(users);
-});
-
-app.get('/api/logs', (req, res) => {
-    res.json(logs);
-});
-
-app.post('/api/login-request', (req, res) => {
-    const { username, copyId } = req.body;
-    let user = users.find(u => u.copyId === copyId);
-
-    if (!user) {
-        user = {
-            username,
-            copyId,
-            approved: false,
-            role: 'viewer',
-            status: 'active',
-            lastSeen: Date.now()
-        };
-        users.push(user);
-    } else {
-        user.username = username;
-        user.lastSeen = Date.now();
-    }
-
-    io.emit('usersUpdate', users);
-    res.json({ approved: user.approved, role: user.role });
-});
-
-app.post('/api/user-heartbeat', (req, res) => {
-    const { copyId, status } = req.body;
-    const user = users.find(u => u.copyId === copyId);
-    if (user) {
-        user.status = status;
-        user.lastSeen = Date.now();
-        io.emit('usersUpdate', users);
-    }
-    res.sendStatus(200);
-});
-
-app.post('/api/approve-user', (req, res) => {
-    const { copyId, approve, adminName } = req.body;
-    const userIndex = users.findIndex(u => u.copyId === copyId);
-
-    if (userIndex !== -1) {
-        const targetUser = users[userIndex];
-        if (approve) {
-            targetUser.approved = true;
-            logs.unshift({
-                by: adminName || 'Admin',
-                action: 'موافقة على دخول المستخدم',
-                target: targetUser.username,
-                time: new Date().toLocaleString('ar-SA')
+            cadets.forEach(c => {
+                const wingsHtml = (c.wings || []).map(w => `<span class="badge">${w}</span>`).join(' ');
+                const row = `
+                    <tr>
+                        <td><b>${c.name}</b></td>
+                        <td>${c.rank}</td>
+                        <td>${c.hours} ساعة</td>
+                        <td>${c.points} نقطة</td>
+                        <td>${wingsHtml || '-'}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
             });
-        } else {
-            users.splice(userIndex, 1);
-            logs.unshift({
-                by: adminName || 'Admin',
-                action: 'رفض طلب دخول',
-                target: targetUser.username,
-                time: new Date().toLocaleString('ar-SA')
-            });
-        }
-        io.emit('usersUpdate', users);
-        io.emit('logsUpdate', logs);
-    }
-    res.json({ success: true });
-});
-
-app.post('/api/update-cadet', (req, res) => {
-    const { discordId, hours, points, wings, reportTitle, reportContent, editedBy } = req.body;
-    const cadet = cadets.find(c => c.discordId === discordId);
-
-    if (cadet) {
-        cadet.hours = parseFloat(hours) || 0;
-        cadet.points = parseInt(points) || 0;
-        cadet.wings = wings || [];
-
-        if (reportTitle && reportContent) {
-            if (!cadet.reports) cadet.reports = [];
-            cadet.reports.push({
-                title: reportTitle,
-                content: reportContent,
-                date: new Date().toISOString().split('T')[0]
-            });
-        }
-
-        logs.unshift({
-            by: editedBy || 'Admin',
-            action: 'تعديل بيانات ورتبة/ساعات العسكري',
-            target: cadet.name,
-            time: new Date().toLocaleString('ar-SA')
         });
-
-        const sorted = sortCadets(cadets);
-        io.emit('cadetsUpdate', sorted);
-        io.emit('logsUpdate', logs);
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: 'Cadet not found' });
-    }
-});
-
-// إعداد الاتصال التفاعلي عبر Socket.IO
-io.on('connection', (socket) => {
-    socket.emit('cadetsUpdate', sortCadets(cadets));
-    socket.emit('usersUpdate', users);
-    socket.emit('logsUpdate', logs);
-});
-
-// فحص عدم النشاط للتحقق من حالة المستخدمين كل 30 ثانية
-setInterval(() => {
-    const now = Date.now();
-    let updated = false;
-
-    users.forEach(u => {
-        if (now - u.lastSeen > 120000 && u.status !== 'no-active') {
-            u.status = 'no-active';
-            updated = true;
-        }
-    });
-
-    if (updated) {
-        io.emit('usersUpdate', users);
-    }
-}, 30000);
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+    </script>
+</body>
+</html>
