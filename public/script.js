@@ -106,18 +106,19 @@ document.getElementById('loginForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const username = document.getElementById('loginUsername').value;
     const copyId = document.getElementById('loginCopyId').value;
-    checkLogin(username, copyId);
+    const secretCode = document.getElementById('loginSecretCode')?.value || '';
+    checkLogin(username, copyId, secretCode);
 });
 
-async function checkLogin(username, copyId) {
+async function checkLogin(username, copyId, secretCode = '') {
     const res = await fetch('/api/login-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, copyId })
+        body: JSON.stringify({ username, copyId, secretCode })
     });
     const data = await res.json();
 
-    currentUser = { username, copyId, approved: data.approved };
+    currentUser = { username, copyId, approved: data.approved, role: data.role };
     localStorage.setItem('academy_user', JSON.stringify(currentUser));
 
     document.getElementById('displayLoggedUser').innerText = username;
@@ -142,6 +143,7 @@ function updateStats() {
 
 function renderCadets() {
     const tbody = document.getElementById('cadetsTableBody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     cadetsData.forEach(c => {
@@ -149,7 +151,7 @@ function renderCadets() {
         tbody.innerHTML += `
             <tr>
                 <td><b>${c.name}</b></td>
-                <td><span style="color:var(--accent-blue);">${c.rank}</span></td>
+                <td><span style="color:var(--accent-blue); font-weight:600;">${c.rank || 'N/A'}</span></td>
                 <td><span style="color:var(--accent-green); font-weight:bold;">${c.hours || 0} س</span></td>
                 <td><span style="color:var(--accent-amber); font-weight:bold;">${c.points || 0} ن</span></td>
                 <td>
@@ -174,6 +176,7 @@ function renderCadets() {
 
 function renderUsers() {
     const tbody = document.getElementById('usersTableBody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     usersData.forEach(u => {
@@ -191,6 +194,7 @@ function renderUsers() {
                 <td><b>${u.username}</b></td>
                 <td>${u.copyId}</td>
                 <td>${badge}</td>
+                <td>${u.role || 'viewer'}</td>
                 <td>${u.approved ? '<span style="color:var(--accent-green)">مقبول</span>' : '<span style="color:var(--accent-red)">معلق</span>'}</td>
             </tr>
         `;
@@ -199,6 +203,7 @@ function renderUsers() {
 
 function renderApproval() {
     const tbody = document.getElementById('approvalTableBody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     const pending = usersData.filter(u => !u.approved);
@@ -231,6 +236,7 @@ async function approveUser(copyId, approve) {
 
 function renderLogs() {
     const tbody = document.getElementById('logsTableBody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     logsData.forEach(l => {
@@ -259,7 +265,7 @@ function openWingsDetails(discordId) {
         cadet.wings.forEach(wId => {
             const wInfo = availableWings.find(w => w.id === wId) || { name: wId, icon: 'fa-shield' };
             container.innerHTML += `
-                <div style="background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px; display:flex; align-items:center; gap:10px;">
+                <div style="background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px; display:flex; align-items:center; gap:10px; margin-bottom:6px;">
                     <i class="fa-solid ${wInfo.icon}" style="color:var(--accent-indigo); font-size:18px;"></i>
                     <span style="font-weight:bold;">${wInfo.name}</span>
                 </div>
@@ -285,7 +291,7 @@ function openReportsDetails(discordId) {
             container.innerHTML += `
                 <div style="background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border-right:3px solid var(--accent-blue);">
                     <div style="font-size:11px; color:var(--text-secondary);">${r.date}</div>
-                    <div style="font-weight:bold; font-size:13px;">${r.title}</div>
+                    <div style="font-weight:bold; font-size:13px; color:#fff;">${r.title}</div>
                     <div style="font-size:12px; color:var(--text-secondary);">${r.content}</div>
                 </div>
             `;
@@ -312,7 +318,7 @@ function openEditModal(discordId) {
     availableWings.forEach(w => {
         const isChecked = cadet.wings && cadet.wings.includes(w.id) ? 'checked' : '';
         wingsContainer.innerHTML += `
-            <label>
+            <label style="display:inline-flex; align-items:center; gap:6px; margin-right:12px; margin-bottom:8px; cursor:pointer;">
                 <input type="checkbox" name="wings" value="${w.id}" ${isChecked}>
                 <i class="fa-solid ${w.icon}"></i> ${w.name}
             </label>
