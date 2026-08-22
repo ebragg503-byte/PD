@@ -1,227 +1,197 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
+const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
-const PORT = process.env.PORT || 3000;
+const io = new Server(server);
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static('public'));
 
-// سلم رتب LSPD مع الأوزان للفرز (الرتب الأعلى تظهر أولاً)
-const RANK_WEIGHTS = {
-    'Chief of Police': 110,
-    'Assistant Chief': 100,
-    'Deputy Chief': 90,
-    'Captain': 80,
-    'Lieutenant': 70,
-    'Staff Sergeant': 60,
-    'First Sergeant': 50,
-    'Sergeant': 40,
-    'Senior Lead Officer': 30,
-    'Officer III': 25,
-    'Officer II': 20,
-    'Officer I': 15,
-    'Cadet': 10
-};
+// إعدادات البوت والدسكورد
+const TOKEN = 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
+const GUILD_ID = '1517858234378227834';
 
-// بيانات الوينقات المتاحة
-const availableWings = [
-    { id: 'swat', name: 'قوات SWAT', icon: 'fa-user-ninja' },
-    { id: 'air', name: 'الطيران العمودي (Air Unit)', icon: 'fa-helicopter' },
-    { id: 'k9', name: 'وحدة K-9', icon: 'fa-dog' },
-    { id: 'traffic', name: 'المرور والسير', icon: 'fa-car' },
-    { id: 'investigation', name: 'التحقيقات CID', icon: 'fa-magnifying-glass' },
-    { id: 'academy', name: 'مدرب الأكاديمية', icon: 'fa-graduation-cap' }
+// معرفات الرتب
+const POLICE_ROLE_ID = "1520526844313469080"; // جميع أفراد الشرطة
+const CADET_ROLE_IDS = [
+    "1520526818225164329", // أكاديت
+    "1522994966597468191"  // سولو كاديت
 ];
 
-// قاعدة بيانات مؤقتة في الذاكرة
-let cadets = [
-    {
-        discordId: '1001',
-        name: 'Ebrahem Derbah',
-        rank: 'First Sergeant',
-        hours: 45.5,
-        points: 120,
-        wings: ['swat', 'air', 'academy'],
-        reports: [{ title: 'تقرير دورية', content: 'تم ضبط مخالفات في السرعة', date: '2026-08-22' }]
-    },
-    {
-        discordId: '1002',
-        name: 'John Doe',
-        rank: 'Cadet',
-        hours: 12.0,
-        points: 30,
-        wings: ['traffic'],
-        reports: []
-    }
-];
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
+});
 
-let users = [];
-let logs = [];
-
-// دالة فرز العسكريين حسب وزن الرتبة
-function sortCadets(data) {
-    return data.sort((a, b) => {
-        const weightA = RANK_WEIGHTS[a.rank] || 0;
-        const weightB = RANK_WEIGHTS[b.rank] || 0;
-        return weightB - weightA;
-    });
+// قواعد البيانات المحلية
+const DB_FILE = path.join(__dirname, 'database.json');
+let dbData = {};
+if (fs.existsSync(DB_FILE)) {
+    try { dbData = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8')); } catch (e) { dbData = {}; }
 }
 
-// REST APIs
-app.get('/api/wings-list', (req, res) => {
-    res.json(availableWings);
-});
+function saveData() {
+    fs.writeFileSync(DB_FILE, JSON.stringify(dbData, null, 2));
+}
 
-app.get('/api/cadets', (req, res) => {
-    res.json(sortCadets(cadets));
-});
+let activeUsers = [];
+let logsHistory = [];
 
-app.get('/api/users', (req, res) => {
-    res.json(users);
-});
+// قائمة الوينقات المتاحة
+const availableWings = [
+    { id: 'airship', name: 'طيران (Airship)', icon: 'fa-plane' },
+    { id: 'swat', name: 'تدخل سريع (SWAT)', icon: 'fa-shield-heart' },
+    { id: 'field_instructor', name: 'مدرب ميداني', icon: 'fa-chalkboard-user' },
+    { id: 'bureau_investigation', name: 'تحقيقات (CID)', icon: 'fa-magnifying-glass' }
+];
 
-app.get('/api/logs', (req, res) => {
-    res.json(logs);
-});
+app.get('/api/wings-list', (req, res) => res.json(availableWings));
 
+async function fetchGuildMembers() {
+    try {
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const members = await guild.members.fetch();
+
+        let allPoliceList = [];
+        let cadetsList = [];
+
+        members.forEach(member => {
+            if (member.user.bot) return;
+
+            // التحقق من وجود رتبة الشرطة العامة
+            if (member.roles.cache.has(POLICE_ROLE_ID)) {
+                const cadetData = {
+                    discordId: member.id,
+                    name: member.displayName || member.user.username, // استخدام اسم السيرفر بدقة
+                    rank: member.roles.highest.name,
+                    hours: dbData[member.id]?.hours || 0,
+                    points: dbData[member.id]?.points || 0,
+                    wings: dbData[member.id]?.wings || [],
+                    reports: dbData[member.id]?.reports || []
+                };
+
+                // إضافة القائمة العامة
+                allPoliceList.push(cadetData);
+
+                // إضافة لقائمة الكاديت إذا كان يملك إحدى رتب الكاديت/سولو كاديت
+                const isCadet = member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id));
+                if (isCadet) {
+                    cadetsList.push(cadetData);
+                }
+            }
+        });
+
+        io.emit('policeDataUpdate', {
+            allPolice: allPoliceList,
+            cadets: cadetsList
+        });
+
+    } catch (error) {
+        console.error("خطأ أثناء جلب أعضاء السيرفر:", error);
+    }
+}
+
+// طلبات الدخول والـ APIs
 app.post('/api/login-request', (req, res) => {
     const { username, copyId } = req.body;
-    let user = users.find(u => u.copyId === copyId);
-
+    let user = activeUsers.find(u => u.copyId === copyId);
     if (!user) {
-        user = {
-            username: username || 'User',
-            copyId,
-            approved: false,
-            role: 'viewer',
-            status: 'active',
-            lastSeen: Date.now()
-        };
-        users.push(user);
+        user = { username, copyId, approved: false, status: 'active', lastSeen: Date.now() };
+        activeUsers.push(user);
     } else {
-        if (username) user.username = username;
+        user.username = username;
         user.lastSeen = Date.now();
     }
-
-    io.emit('usersUpdate', users);
-    res.json({ approved: user.approved, role: user.role, user });
+    io.emit('usersUpdate', activeUsers);
+    res.json({ approved: user.approved });
 });
 
 app.post('/api/user-heartbeat', (req, res) => {
-    const { copyId, status } = req.body;
-    const user = users.find(u => u.copyId === copyId);
+    const { copyId } = req.body;
+    const user = activeUsers.find(u => u.copyId === copyId);
     if (user) {
-        user.status = status;
         user.lastSeen = Date.now();
-        io.emit('usersUpdate', users);
+        user.status = 'active';
+        io.emit('usersUpdate', activeUsers);
     }
     res.sendStatus(200);
 });
 
 app.post('/api/approve-user', (req, res) => {
     const { copyId, approve, adminName } = req.body;
-    const userIndex = users.findIndex(u => u.copyId === copyId);
-
-    if (userIndex !== -1) {
-        const targetUser = users[userIndex];
-        if (approve) {
-            targetUser.approved = true;
-            logs.unshift({
-                by: adminName || 'Admin',
-                action: 'موافقة على دخول المستخدم',
-                target: targetUser.username,
-                time: new Date().toLocaleString('ar-SA')
-            });
-        } else {
-            users.splice(userIndex, 1);
-            logs.unshift({
-                by: adminName || 'Admin',
-                action: 'رفض طلب دخول',
-                target: targetUser.username,
-                time: new Date().toLocaleString('ar-SA')
-            });
-        }
-        io.emit('usersUpdate', users);
-        io.emit('logsUpdate', logs);
+    const user = activeUsers.find(u => u.copyId === copyId);
+    if (user) {
+        user.approved = approve;
+        logsHistory.unshift({
+            by: adminName || 'المسؤول',
+            action: approve ? 'قبول دخول المستخدم' : 'رفض دخول المستخدم',
+            target: user.username,
+            time: new Date().toLocaleTimeString('ar-EG')
+        });
+        io.emit('usersUpdate', activeUsers);
+        io.emit('logsUpdate', logsHistory);
     }
-    res.json({ success: true });
+    res.sendStatus(200);
 });
 
 app.post('/api/update-cadet', (req, res) => {
     const { discordId, hours, points, wings, reportTitle, reportContent, editedBy } = req.body;
-    const cadet = cadets.find(c => c.discordId === discordId);
-
-    if (cadet) {
-        if (hours !== undefined) cadet.hours = parseFloat(hours) || 0;
-        if (points !== undefined) cadet.points = parseInt(points) || 0;
-        if (wings !== undefined) cadet.wings = wings || [];
-
-        if (reportTitle && reportContent) {
-            if (!cadet.reports) cadet.reports = [];
-            cadet.reports.push({
-                title: reportTitle,
-                content: reportContent,
-                date: new Date().toISOString().split('T')[0]
-            });
-        }
-
-        logs.unshift({
-            by: editedBy || 'Admin',
-            action: 'تعديل بيانات ورتبة/ساعات العسكري',
-            target: cadet.name,
-            time: new Date().toLocaleString('ar-SA')
-        });
-
-        const sorted = sortCadets(cadets);
-        io.emit('cadetsUpdate', sorted);
-        io.emit('logsUpdate', logs);
-        res.json({ success: true, cadet });
-    } else {
-        res.status(404).json({ error: 'Cadet not found' });
+    
+    if (!dbData[discordId]) {
+        dbData[discordId] = { hours: 0, points: 0, wings: [], reports: [] };
     }
+
+    dbData[discordId].hours = parseFloat(hours) || 0;
+    dbData[discordId].points = parseInt(points) || 0;
+    dbData[discordId].wings = wings || [];
+
+    if (reportTitle && reportContent) {
+        dbData[discordId].reports.push({
+            title: reportTitle,
+            content: reportContent,
+            date: new Date().toLocaleDateString('ar-EG')
+        });
+    }
+
+    saveData();
+    fetchGuildMembers();
+
+    logsHistory.unshift({
+        by: editedBy || 'مسؤول',
+        action: 'تعديل البيانات / إضافة تقرير',
+        target: `العسكري (ID: ${discordId})`,
+        time: new Date().toLocaleTimeString('ar-EG')
+    });
+    io.emit('logsUpdate', logsHistory);
+
+    res.sendStatus(200);
 });
 
-// إعداد الاتصال التفاعلي عبر Socket.IO
-io.on('connection', (socket) => {
-    socket.emit('cadetsUpdate', sortCadets(cadets));
-    socket.emit('usersUpdate', users);
-    socket.emit('logsUpdate', logs);
-});
-
-// فحص عدم النشاط للتحقق من حالة المستخدمين كل 30 ثانية
+// فحص الخمول كل 30 ثانية
 setInterval(() => {
     const now = Date.now();
-    let updated = false;
-
-    users.forEach(u => {
-        if (now - u.lastSeen > 120000 && u.status !== 'no-active') {
+    activeUsers.forEach(u => {
+        if (now - u.lastSeen > 40000) {
             u.status = 'no-active';
-            updated = true;
         }
     });
-
-    if (updated) {
-        io.emit('usersUpdate', users);
-    }
+    io.emit('usersUpdate', activeUsers);
 }, 30000);
 
-// توجيه جميع المسارات غير المعرفة إلى index.html بشكل آمن ومتوافق مع جميع إصدارات Express
-app.use((req, res) => {
-    const indexPath = path.join(__dirname, 'public', 'index.html');
-    if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-    } else {
-        res.status(404).send('الصفحة غير موجودة، يُرجى التأكد من وجود index.html في مجلد public');
-    }
+client.on('ready', () => {
+    console.log(`تم تسجيل الدخول بالبوت: ${client.user.tag}`);
+    fetchGuildMembers();
+    setInterval(fetchGuildMembers, 60000);
 });
 
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+client.login(TOKEN);
+server.listen(3000, () => console.log('السيرفر يعمل على المنفذ 3000'));
