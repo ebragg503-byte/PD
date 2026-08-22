@@ -1,228 +1,174 @@
 const socket = io();
 
 let currentUser = null;
-let cadetsData = [];
-let usersData = [];
-let logsData = [];
 let availableWings = [];
+let globalAllPolice = [];
+let globalCadetsOnly = [];
 
-let lastActivity = Date.now();
-let userStatus = 'active';
+fetch('/api/wings-list')
+    .then(res => res.json())
+    .then(data => { availableWings = data; });
 
-document.addEventListener('mousemove', resetInactivity);
-document.addEventListener('keypress', resetInactivity);
-
-function resetInactivity() {
-    lastActivity = Date.now();
-    if (userStatus === 'sleep') {
-        userStatus = 'active';
-        sendStatusUpdate();
-    }
-}
-
-setInterval(() => {
-    if (currentUser && currentUser.approved) {
-        if (Date.now() - lastActivity > 60000 && userStatus !== 'sleep') {
-            userStatus = 'sleep';
-            sendStatusUpdate();
-        } else {
-            sendStatusUpdate();
-        }
-    }
-}, 10000);
-
-function sendStatusUpdate() {
-    if (!currentUser) return;
-    fetch('/api/user-heartbeat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ copyId: currentUser.copyId, status: userStatus })
-    });
-}
-
-socket.on('cadetsUpdate', (data) => {
-    cadetsData = data;
-    renderCadets();
-    updateStats();
-});
-
-socket.on('usersUpdate', (data) => {
-    usersData = data;
-    renderUsers();
-    renderApproval();
-
-    if (currentUser) {
-        const updated = usersData.find(u => u.copyId === currentUser.copyId);
-        if (updated) {
-            currentUser = updated;
-            if (currentUser.approved) {
-                document.getElementById('loginModal').style.display = 'none';
-            } else {
-                document.getElementById('loginModal').style.display = 'flex';
-                document.getElementById('loginStatus').innerHTML = `<span style="color:var(--accent-amber)">حسابك بانتظار موافقة المسؤول...</span>`;
-            }
-        }
-    }
-});
-
-socket.on('logsUpdate', (data) => {
-    logsData = data;
-    renderLogs();
-});
-
-async function init() {
-    try {
-        const resWings = await fetch('/api/wings-list');
-        availableWings = await resWings.json();
-
-        const resCadets = await fetch('/api/cadets');
-        cadetsData = await resCadets.json();
-
-        const resUsers = await fetch('/api/users');
-        usersData = await resUsers.json();
-
-        const resLogs = await fetch('/api/logs');
-        logsData = await resLogs.json();
-
-        renderCadets();
-        renderUsers();
-        renderApproval();
-        renderLogs();
-        updateStats();
-
-        const savedUser = localStorage.getItem('academy_user');
-        if (savedUser) {
-            currentUser = JSON.parse(savedUser);
-            document.getElementById('loginUsername').value = currentUser.username;
-            document.getElementById('loginCopyId').value = currentUser.copyId;
-            checkLogin(currentUser.username, currentUser.copyId);
-        }
-    } catch (e) {
-        console.error("Initialization error:", e);
-    }
-}
-
-document.getElementById('loginForm').addEventListener('submit', (e) => {
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const username = document.getElementById('loginUsername').value;
-    const copyId = document.getElementById('loginCopyId').value;
-    const secretCode = document.getElementById('loginSecretCode')?.value || '';
-    checkLogin(username, copyId, secretCode);
-});
+    const username = document.getElementById('loginUsername').value.trim();
+    const copyId = document.getElementById('loginCopyId').value.trim();
+    const statusDiv = document.getElementById('loginStatus');
 
-async function checkLogin(username, copyId, secretCode = '') {
+    statusDiv.style.color = '#f59e0b';
+    statusDiv.textContent = 'جاري التحقق من الطلب...';
+
     const res = await fetch('/api/login-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, copyId, secretCode })
+        body: JSON.stringify({ username, copyId })
     });
+
     const data = await res.json();
-
-    currentUser = { username, copyId, approved: data.approved, role: data.role };
-    localStorage.setItem('academy_user', JSON.stringify(currentUser));
-
-    document.getElementById('displayLoggedUser').innerText = username;
-    document.getElementById('displayLoggedStatus').innerText = `ID: ${copyId}`;
+    currentUser = { username, copyId, approved: data.approved };
 
     if (data.approved) {
         document.getElementById('loginModal').style.display = 'none';
-        sendStatusUpdate();
+        document.getElementById('displayLoggedUser').textContent = username;
+        document.getElementById('displayLoggedStatus').textContent = `معرّف: ${copyId}`;
+        startHeartbeat();
     } else {
-        document.getElementById('loginModal').style.display = 'flex';
-        document.getElementById('loginStatus').innerHTML = `<span style="color:var(--accent-amber)">تم إرسال الطلب، بانتظار موافقة المسؤول...</span>`;
+        statusDiv.style.color = '#ef4444';
+        statusDiv.textContent = 'في انتظار موافقة المسؤول لتسجيل الدخول...';
     }
-}
+});
 
-function updateStats() {
-    document.getElementById('statTotal').innerText = cadetsData.length;
-    const hours = cadetsData.reduce((acc, c) => acc + (c.hours || 0), 0);
-    document.getElementById('statHours').innerText = hours.toFixed(1);
-    const points = cadetsData.reduce((acc, c) => acc + (c.points || 0), 0);
-    document.getElementById('statPoints').innerText = points;
-}
-
-function renderCadets() {
-    const tbody = document.getElementById('cadetsTableBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    cadetsData.forEach(c => {
-        const wingCount = c.wings ? c.wings.length : 0;
-        tbody.innerHTML += `
-            <tr>
-                <td><b>${c.name}</b></td>
-                <td><span style="color:var(--accent-blue); font-weight:600;">${c.rank || 'N/A'}</span></td>
-                <td><span style="color:var(--accent-green); font-weight:bold;">${c.hours || 0} س</span></td>
-                <td><span style="color:var(--accent-amber); font-weight:bold;">${c.points || 0} ن</span></td>
-                <td>
-                    <button class="badge-wings" onclick="openWingsDetails('${c.discordId}')">
-                        <i class="fa-solid fa-award"></i> ${wingCount} وينق
-                    </button>
-                </td>
-                <td>
-                    <button class="btn" style="background:rgba(255,255,255,0.1); color:#fff;" onclick="openReportsDetails('${c.discordId}')">
-                        <i class="fa-solid fa-file-lines"></i> ${c.reports ? c.reports.length : 0}
-                    </button>
-                </td>
-                <td style="text-align:center;">
-                    <button class="btn btn-primary" onclick="openEditModal('${c.discordId}')">
-                        <i class="fa-solid fa-pen"></i> تعديل
-                    </button>
-                </td>
-            </tr>
-        `;
-    });
-}
-
-function renderUsers() {
-    const tbody = document.getElementById('usersTableBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    usersData.forEach(u => {
-        let badge = '';
-        if (u.status === 'active') {
-            badge = `<span class="badge-status" style="background:rgba(16,185,129,0.2); color:var(--accent-green);"><span class="status-dot status-active"></span> Active</span>`;
-        } else if (u.status === 'sleep') {
-            badge = `<span class="badge-status" style="background:rgba(245,158,11,0.2); color:var(--accent-amber);"><span class="status-dot status-sleep"></span> Sleep</span>`;
-        } else {
-            badge = `<span class="badge-status" style="background:rgba(239,68,68,0.2); color:var(--accent-red);"><span class="status-dot status-no-active"></span> No Active</span>`;
+function startHeartbeat() {
+    setInterval(() => {
+        if (currentUser && currentUser.approved) {
+            fetch('/api/user-heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ copyId: currentUser.copyId })
+            });
         }
-
-        tbody.innerHTML += `
-            <tr>
-                <td><b>${u.username}</b></td>
-                <td>${u.copyId}</td>
-                <td>${badge}</td>
-                <td>${u.role || 'viewer'}</td>
-                <td>${u.approved ? '<span style="color:var(--accent-green)">مقبول</span>' : '<span style="color:var(--accent-red)">معلق</span>'}</td>
-            </tr>
-        `;
-    });
+    }, 15000);
 }
 
-function renderApproval() {
-    const tbody = document.getElementById('approvalTableBody');
-    if (!tbody) return;
+socket.on('policeDataUpdate', (data) => {
+    globalAllPolice = data.allPolice;
+    globalCadetsOnly = data.cadets;
+
+    renderTableRows('allPoliceTableBody', globalAllPolice);
+    renderTableRows('cadetsOnlyTableBody', globalCadetsOnly);
+    updateStats(globalAllPolice);
+});
+
+socket.on('usersUpdate', (users) => {
+    renderUsers(users);
+    renderApprovals(users);
+
+    if (currentUser) {
+        const myRecord = users.find(u => u.copyId === currentUser.copyId);
+        if (myRecord && myRecord.approved && document.getElementById('loginModal').style.display !== 'none') {
+            currentUser.approved = true;
+            document.getElementById('loginModal').style.display = 'none';
+            document.getElementById('displayLoggedUser').textContent = currentUser.username;
+            document.getElementById('displayLoggedStatus').textContent = `معرّف: ${currentUser.copyId}`;
+            startHeartbeat();
+        }
+    }
+});
+
+socket.on('logsUpdate', (logs) => {
+    renderLogs(logs);
+});
+
+function renderTableRows(tableBodyId, dataList) {
+    const tbody = document.getElementById(tableBodyId);
     tbody.innerHTML = '';
 
-    const pending = usersData.filter(u => !u.approved);
-    if (pending.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-secondary);">لا توجد طلبات معلقة حالياً</td></tr>`;
+    if (!dataList || dataList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-secondary);">لا يوجد أعضاء في هذه القائمة</td></tr>';
         return;
     }
 
-    pending.forEach(u => {
-        tbody.innerHTML += `
-            <tr>
-                <td><b>${u.username}</b></td>
-                <td>${u.copyId}</td>
-                <td style="text-align:center;">
-                    <button class="btn btn-success" onclick="approveUser('${u.copyId}', true)">قبول</button>
-                    <button class="btn btn-danger" onclick="approveUser('${u.copyId}', false)">رفض</button>
-                </td>
-            </tr>
+    dataList.forEach(c => {
+        const wingsCount = (c.wings || []).length;
+        const reportsCount = (c.reports || []).length;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><b>${c.name}</b></td>
+            <td><span style="background: rgba(56, 189, 248, 0.1); color: var(--accent-blue); padding: 4px 8px; border-radius: 6px; font-weight: bold;">${c.rank}</span></td>
+            <td>${c.hours} ساعة</td>
+            <td>${c.points} نقطة</td>
+            <td><button class="badge-wings" onclick="openWingsModal('${c.discordId}')">${wingsCount} وينق/ات</button></td>
+            <td><button class="badge-wings" style="background: rgba(245, 158, 11, 0.2); color: #fde68a;" onclick="openReportsModal('${c.discordId}')">${reportsCount} تقارير</button></td>
+            <td style="text-align: center;">
+                <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;" onclick="openEditModal('${c.discordId}')"><i class="fa-solid fa-pen"></i> تعديل</button>
+            </td>
         `;
+        tbody.appendChild(tr);
+    });
+}
+
+function updateStats(allPolice) {
+    document.getElementById('statTotal').textContent = allPolice.length;
+    const totalHours = allPolice.reduce((acc, c) => acc + (parseFloat(c.hours) || 0), 0);
+    const totalPoints = allPolice.reduce((acc, c) => acc + (parseInt(c.points) || 0), 0);
+    document.getElementById('statHours').textContent = totalHours.toFixed(1);
+    document.getElementById('statPoints').textContent = totalPoints;
+}
+
+function renderUsers(users) {
+    const tbody = document.getElementById('usersTableBody');
+    tbody.innerHTML = '';
+
+    users.forEach(u => {
+        let statusBadge = '<span class="badge-status" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green);"><span class="status-dot status-active"></span>متواجد</span>';
+        if (u.status === 'no-active') {
+            statusBadge = '<span class="badge-status" style="background: rgba(239, 68, 68, 0.2); color: var(--accent-red);"><span class="status-dot status-no-active"></span>غير نشط</span>';
+        }
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${u.username}</td>
+            <td><code>${u.copyId}</code></td>
+            <td>${statusBadge}</td>
+            <td>${u.approved ? '<span style="color: var(--accent-green);">مقبول</span>' : '<span style="color: var(--accent-amber);">بانتظار الموافقة</span>'}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderApprovals(users) {
+    const tbody = document.getElementById('approvalTableBody');
+    tbody.innerHTML = '';
+
+    const pending = users.filter(u => !u.approved);
+    pending.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${u.username}</td>
+            <td><code>${u.copyId}</code></td>
+            <td style="text-align: center; display: flex; gap: 8px; justify-content: center;">
+                <button class="btn btn-success" style="padding: 5px 12px; font-size: 12px;" onclick="approveUser('${u.copyId}', true)">قبول</button>
+                <button class="btn btn-danger" style="padding: 5px 12px; font-size: 12px;" onclick="approveUser('${u.copyId}', false)">رفض</button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderLogs(logs) {
+    const tbody = document.getElementById('logsTableBody');
+    tbody.innerHTML = '';
+
+    logs.forEach(l => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><b>${l.by}</b></td>
+            <td>${l.action}</td>
+            <td>${l.target}</td>
+            <td style="color: var(--text-secondary); font-size: 12px;">${l.time}</td>
+        `;
+        tbody.appendChild(tr);
     });
 }
 
@@ -234,92 +180,22 @@ async function approveUser(copyId, approve) {
     });
 }
 
-function renderLogs() {
-    const tbody = document.getElementById('logsTableBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    logsData.forEach(l => {
-        tbody.innerHTML += `
-            <tr>
-                <td><b style="color:var(--accent-blue);">${l.by}</b></td>
-                <td>${l.action}</td>
-                <td><b>${l.target}</b></td>
-                <td style="color:var(--text-secondary); font-size:12px;">${l.time}</td>
-            </tr>
-        `;
-    });
-}
-
-function openWingsDetails(discordId) {
-    const cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return;
-
-    document.getElementById('wingsModalTitle').innerText = `وينقات العسكري: ${cadet.name}`;
-    const container = document.getElementById('wingsListDetails');
-    container.innerHTML = '';
-
-    if (!cadet.wings || cadet.wings.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">لا يملك أي وينقات حالياً</p>';
-    } else {
-        cadet.wings.forEach(wId => {
-            const wInfo = availableWings.find(w => w.id === wId) || { name: wId, icon: 'fa-shield' };
-            container.innerHTML += `
-                <div style="background:rgba(255,255,255,0.05); padding:10px 15px; border-radius:8px; display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-                    <i class="fa-solid ${wInfo.icon}" style="color:var(--accent-indigo); font-size:18px;"></i>
-                    <span style="font-weight:bold;">${wInfo.name}</span>
-                </div>
-            `;
-        });
-    }
-
-    document.getElementById('wingsModal').style.display = 'flex';
-}
-
-function openReportsDetails(discordId) {
-    const cadet = cadetsData.find(c => c.discordId === discordId);
-    if (!cadet) return;
-
-    document.getElementById('reportsModalTitle').innerText = `تقارير العسكري: ${cadet.name}`;
-    const container = document.getElementById('reportsListDetails');
-    container.innerHTML = '';
-
-    if (!cadet.reports || cadet.reports.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">لا توجد تقارير مسجلة</p>';
-    } else {
-        cadet.reports.forEach(r => {
-            container.innerHTML += `
-                <div style="background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border-right:3px solid var(--accent-blue);">
-                    <div style="font-size:11px; color:var(--text-secondary);">${r.date}</div>
-                    <div style="font-weight:bold; font-size:13px; color:#fff;">${r.title}</div>
-                    <div style="font-size:12px; color:var(--text-secondary);">${r.content}</div>
-                </div>
-            `;
-        });
-    }
-
-    document.getElementById('reportsModal').style.display = 'flex';
-}
-
 function openEditModal(discordId) {
-    const cadet = cadetsData.find(c => c.discordId === discordId);
+    const cadet = globalAllPolice.find(c => c.discordId === discordId);
     if (!cadet) return;
 
     document.getElementById('editDiscordId').value = cadet.discordId;
-    document.getElementById('editModalTitle').innerText = `تعديل: ${cadet.name}`;
-    document.getElementById('editHours').value = cadet.hours || 0;
-    document.getElementById('editPoints').value = cadet.points || 0;
-    document.getElementById('editReportTitle').value = '';
-    document.getElementById('editReportContent').value = '';
+    document.getElementById('editHours').value = cadet.hours;
+    document.getElementById('editPoints').value = cadet.points;
 
     const wingsContainer = document.getElementById('wingsContainer');
     wingsContainer.innerHTML = '';
 
     availableWings.forEach(w => {
-        const isChecked = cadet.wings && cadet.wings.includes(w.id) ? 'checked' : '';
+        const isChecked = (cadet.wings || []).includes(w.id) ? 'checked' : '';
         wingsContainer.innerHTML += `
-            <label style="display:inline-flex; align-items:center; gap:6px; margin-right:12px; margin-bottom:8px; cursor:pointer;">
-                <input type="checkbox" name="wings" value="${w.id}" ${isChecked}>
+            <label>
+                <input type="checkbox" value="${w.id}" ${isChecked}>
                 <i class="fa-solid ${w.icon}"></i> ${w.name}
             </label>
         `;
@@ -330,14 +206,13 @@ function openEditModal(discordId) {
 
 document.getElementById('editForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-
     const discordId = document.getElementById('editDiscordId').value;
     const hours = document.getElementById('editHours').value;
     const points = document.getElementById('editPoints').value;
     const reportTitle = document.getElementById('editReportTitle').value;
     const reportContent = document.getElementById('editReportContent').value;
 
-    const selectedWings = Array.from(document.querySelectorAll('input[name="wings"]:checked')).map(cb => cb.value);
+    const checkedWings = Array.from(document.querySelectorAll('#wingsContainer input:checked')).map(cb => cb.value);
 
     await fetch('/api/update-cadet', {
         method: 'POST',
@@ -346,7 +221,7 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
             discordId,
             hours,
             points,
-            wings: selectedWings,
+            wings: checkedWings,
             reportTitle,
             reportContent,
             editedBy: currentUser ? currentUser.username : 'Admin'
@@ -356,6 +231,52 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
     closeModal('editModal');
 });
 
+function openWingsModal(discordId) {
+    const cadet = globalAllPolice.find(c => c.discordId === discordId);
+    if (!cadet) return;
+
+    const details = document.getElementById('wingsListDetails');
+    details.innerHTML = '';
+
+    if (!cadet.wings || cadet.wings.length === 0) {
+        details.innerHTML = '<p style="color: var(--text-secondary); text-align: center;">لا توجد وينقات مكتسبة.</p>';
+    } else {
+        cadet.wings.forEach(wId => {
+            const w = availableWings.find(item => item.id === wId) || { name: wId, icon: 'fa-award' };
+            details.innerHTML += `
+                <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; display: flex; align-items: center; gap: 10px;">
+                    <i class="fa-solid ${w.icon}" style="color: var(--accent-indigo);"></i>
+                    <span>${w.name}</span>
+                </div>
+            `;
+        });
+    }
+    document.getElementById('wingsModal').style.display = 'flex';
+}
+
+function openReportsModal(discordId) {
+    const cadet = globalAllPolice.find(c => c.discordId === discordId);
+    if (!cadet) return;
+
+    const details = document.getElementById('reportsListDetails');
+    details.innerHTML = '';
+
+    if (!cadet.reports || cadet.reports.length === 0) {
+        details.innerHTML = '<p style="color: var(--text-secondary); text-align: center;">لا توجد تقارير مسجلة.</p>';
+    } else {
+        cadet.reports.forEach(r => {
+            details.innerHTML += `
+                <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; margin-bottom: 8px;">
+                    <div style="font-weight: bold; color: var(--accent-amber);">${r.title}</div>
+                    <div style="font-size: 13px; color: var(--text-primary); margin-top: 4px;">${r.content}</div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">التاريخ: ${r.date}</div>
+                </div>
+            `;
+        });
+    }
+    document.getElementById('reportsModal').style.display = 'flex';
+}
+
 function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
@@ -364,10 +285,15 @@ function switchView(viewName, btn) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
-    document.getElementById('viewCadets').style.display = viewName === 'cadets' ? 'block' : 'none';
-    document.getElementById('viewUsers').style.display = viewName === 'users' ? 'block' : 'none';
-    document.getElementById('viewApproval').style.display = viewName === 'approval' ? 'block' : 'none';
-    document.getElementById('viewLogs').style.display = viewName === 'logs' ? 'block' : 'none';
-}
+    document.getElementById('viewAllPolice').style.display = 'none';
+    document.getElementById('viewCadetsOnly').style.display = 'none';
+    document.getElementById('viewUsers').style.display = 'none';
+    document.getElementById('viewApproval').style.display = 'none';
+    document.getElementById('viewLogs').style.display = 'none';
 
-init();
+    if (viewName === 'allPolice') document.getElementById('viewAllPolice').style.display = 'block';
+    if (viewName === 'cadetsOnly') document.getElementById('viewCadetsOnly').style.display = 'block';
+    if (viewName === 'users') document.getElementById('viewUsers').style.display = 'block';
+    if (viewName === 'approval') document.getElementById('viewApproval').style.display = 'block';
+    if (viewName === 'logs') document.getElementById('viewLogs').style.display = 'block';
+}
