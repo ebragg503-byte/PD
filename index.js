@@ -212,8 +212,8 @@ setInterval(() => {
     }
 }, 30000);
 
-// توجيه المسارات لصفحة index.html
-app.get('*', (req, res) => {
+// توجيه جميع المسارات غير المعرفة إلى index.html بشكل آمن ومتوافق مع جميع إصدارات Express
+app.use((req, res) => {
     const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
