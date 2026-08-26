@@ -14,8 +14,6 @@ app.use(express.static('public'));
 
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
-
-// الأيديات الصحيحة للرومات
 const HOURS_CHANNEL_ID = '1530564311217471639'; 
 const MDT_CHANNEL_ID = '1536506668039274556'; 
 
@@ -58,6 +56,8 @@ function saveData() {
 }
 
 let activeUsers = [];
+let cachedPoliceList = [];
+let cachedCadetsList = [];
 
 function getMemberRank(member) {
     const memberRoleNames = member.roles.cache.map(r => r.name);
@@ -75,48 +75,34 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة متطورة لقراءة وحساب الساعات من الروم
+// قراءة الساعات وتخزينها في dbData
 async function syncHoursFromChannel(guild) {
     try {
         const channel = await guild.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+        const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
         if (!messages) return;
 
         messages.forEach(msg => {
-            // تحديد صاحب الساعات (منشن أو صاحب الرسالة)
             const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
-            
-            // تجميع كامل النص سواء من الرسالة العادية أو الـ Embed
             let fullText = msg.content || "";
             if (msg.embeds.length > 0) {
                 msg.embeds.forEach(emb => {
                     fullText += " " + (emb.title || "") + " " + (emb.description || "");
-                    if (emb.fields) {
-                        emb.fields.forEach(f => fullText += " " + f.name + " " + f.value);
-                    }
                 });
             }
 
-            // استخراج الأرقام من النص
             const matches = fullText.match(/\d+(\.\d+)?/g);
             if (matches) {
-                // نأخذ الأرقام المنطقية فقط (التي لا تمثل ID ديسكورد طويل)
                 const validNumbers = matches.map(Number).filter(n => n > 0 && n < 1000);
                 if (validNumbers.length > 0) {
-                    const parsedHours = validNumbers[0]; // أخذ أول رقم ساعات مذكور
-                    
                     if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
-                    
-                    // تحديث مجموع الساعات
-                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, parsedHours);
+                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, validNumbers[0]);
                 }
             }
         });
-    } catch (err) {
-        console.error("خطأ في مزامنة الساعات:", err);
-    }
+    } catch (err) {}
 }
 
 async function fetchGuildMembers() {
@@ -147,11 +133,11 @@ async function fetchGuildMembers() {
                     discordId: member.id,
                     name: member.displayName || member.user.username,
                     rank: memberRank,
-                    hours: dbData[member.id].hours || 0,
-                    points: dbData[member.id].points || 0,
+                    hours: dbData[member.id] ? (dbData[member.id].hours || 0) : 0,
+                    points: dbData[member.id] ? (dbData[member.id].points || 0) : 0,
                     wings: memberWings,
                     wingsCount: memberWings.length,
-                    reports: dbData[member.id].reports || []
+                    reports: dbData[member.id] ? (dbData[member.id].reports || []) : []
                 };
 
                 allPoliceList.push(cadetData);
@@ -173,43 +159,52 @@ async function fetchGuildMembers() {
         allPoliceList.sort(sortByRank);
         cadetsList.sort(sortByRank);
 
+        cachedPoliceList = allPoliceList;
+        cachedCadetsList = cadetsList;
+
         saveData();
 
         io.emit('policeDataUpdate', {
-            allPolice: allPoliceList,
-            cadets: cadetsList
+            allPolice: cachedPoliceList,
+            cadets: cachedCadetsList
         });
 
     } catch (error) {
-        console.error("خطأ أثناء جلب أعضاء السيرفر:", error);
+        console.error("خطأ جلب الأعضاء:", error);
     }
 }
 
-// استقبال رسائل روم الـ MDT وتسجيلها فوراً كتقارير
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // التأكد من أن الرسالة في روم الـ MDT
     if (message.channel.id === MDT_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
-
-        if (!dbData[userId]) {
-            dbData[userId] = { hours: 0, points: 0, reports: [] };
-        }
+        if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
         if (!dbData[userId].reports) dbData[userId].reports = [];
 
-        const reportText = message.content || (message.attachments.size > 0 ? "تقرير مصور / مرفقات" : "تقرير جديد");
-
-        const newReport = {
+        dbData[userId].reports.push({
             id: Date.now().toString(),
             title: `تقرير MDT`,
-            details: reportText,
+            details: message.content || "مرفقات / صورة",
             date: new Date().toLocaleDateString('ar-SA')
-        };
+        });
 
-        dbData[userId].reports.push(newReport);
         saveData();
         fetchGuildMembers();
+    }
+
+    if (message.channel.id === HOURS_CHANNEL_ID) {
+        const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
+        const matches = message.content.match(/\d+(\.\d+)?/g);
+        if (matches) {
+            const hrs = parseFloat(matches[0]);
+            if (hrs > 0 && hrs < 1000) {
+                if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
+                dbData[userId].hours = Math.max(dbData[userId].hours || 0, hrs);
+                saveData();
+                fetchGuildMembers();
+            }
+        }
     }
 });
 
@@ -217,9 +212,7 @@ app.post('/api/update-member', (req, res) => {
     const { discordId, hours, points, newReport } = req.body;
     if (!discordId) return res.status(400).json({ error: "Missing discordId" });
 
-    if (!dbData[discordId]) {
-        dbData[discordId] = { hours: 0, points: 0, reports: [] };
-    }
+    if (!dbData[discordId]) dbData[discordId] = { hours: 0, points: 0, reports: [] };
 
     if (hours !== undefined) dbData[discordId].hours = parseFloat(hours);
     if (points !== undefined) dbData[discordId].points = parseInt(points);
@@ -258,16 +251,22 @@ app.post('/api/login-request', (req, res) => {
 
 app.post('/api/check-session', (req, res) => {
     const { copyId } = req.body;
-    if (ADMIN_IDS.includes(copyId)) {
-        return res.json({ approved: true });
-    }
+    if (ADMIN_IDS.includes(copyId)) return res.json({ approved: true });
     const user = activeUsers.find(u => u.copyId === copyId);
     res.json({ approved: user ? user.approved : false });
 });
 
 io.on('connection', (socket) => {
     socket.emit('usersUpdate', activeUsers);
-    fetchGuildMembers();
+    
+    if (cachedPoliceList.length > 0) {
+        socket.emit('policeDataUpdate', {
+            allPolice: cachedPoliceList,
+            cadets: cachedCadetsList
+        });
+    } else {
+        fetchGuildMembers();
+    }
 
     socket.on('approve-user', (copyId) => {
         const targetUser = activeUsers.find(u => u.copyId === copyId);
@@ -282,7 +281,6 @@ io.on('connection', (socket) => {
         io.emit('usersUpdate', activeUsers);
     });
 
-    // حذف التقرير بواسطة Socket
     socket.on('delete-report', ({ discordId, reportId, reportIndex }) => {
         if (dbData[discordId] && dbData[discordId].reports) {
             if (reportId) {
@@ -299,7 +297,7 @@ io.on('connection', (socket) => {
 client.on('ready', () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
     fetchGuildMembers();
-    setInterval(fetchGuildMembers, 60000);
+    setInterval(fetchGuildMembers, 300000); 
 });
 
 const PORT = process.env.PORT || 3000;
