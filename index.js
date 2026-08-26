@@ -13,7 +13,7 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // التوكن والمعرفات
-const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GoXhtX.6IzKySzsU2UWktNDMZk0RzafjOAOV3Xw1PPsEY';
+const TOKEN = process.env.BOT_TOKEN || 'MTUzMTAxMjQwNDM3MTI1OTUxMg.GHUWg1.Mu9ZnCQ_owyr5ZPZF-JqjePKhvS7TS32p4cnIg';
 const GUILD_ID = '1517858234378227834';
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
