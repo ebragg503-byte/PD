@@ -1,159 +1,247 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
-const fs = require('fs');
+const socket = io();
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+let currentAllPolice = [];
+let currentCadets = [];
+let currentUser = { username: '', copyId: '' };
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// 1. إدارة تسجيل الدخول
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('loginUsername').value.trim();
+    const copyId = document.getElementById('loginCopyId').value.trim();
 
-const DATA_FILE = path.join(__dirname, 'data.json');
-
-// تحميل أو إنشاء البيانات
-let db = {
-    police: {}, // { discordId: { name, callsign, rank, hours, points, wings, reports, hireDate, disabled } }
-    users: {},
-    logs: []
-};
-
-if (fs.existsSync(DATA_FILE)) {
     try {
-        db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    } catch (e) {
-        console.error("خطأ في قراءة ملف البيانات:", e);
+        const res = await fetch('/api/login-request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, copyId })
+        });
+        const data = await res.json();
+
+        if (data.approved) {
+            currentUser = { username, copyId };
+            document.getElementById('displayLoggedUser').innerText = username;
+            document.getElementById('displayLoggedStatus').innerText = `معرّف: ${copyId}`;
+            document.getElementById('loginModal').style.display = 'none';
+        } else {
+            document.getElementById('loginStatus').innerText = 'انتظار موافقة المسؤول...';
+            document.getElementById('loginStatus').style.color = 'var(--accent-amber)';
+        }
+    } catch (err) {
+        console.error('خطأ تسجيل الدخول:', err);
     }
-}
-
-function saveData() {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-}
-
-// **دالة تصحيح حساب الأيام بدقة**
-function calculateDays(hireDateStr) {
-    if (!hireDateStr) return 0;
-    const parts = hireDateStr.split('/');
-    if (parts.length !== 3) return 0;
-
-    // YYYY/MM/DD
-    const hireDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-    const today = new Date();
-    
-    // تصغير الوقت لحساب الأيام فقط بدون تأثير الساعات
-    hireDate.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
-
-    const diffTime = today - hireDate;
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays >= 0 ? diffDays : 0;
-}
-
-// **استقبال الويب هوك الخاص بساعات العمل (Duty Hours Logger)**
-app.post('/api/duty-webhook', (req, res) => {
-    const data = req.body;
-
-    // التحقق من وجود embed من بوت الديسكورد
-    if (data.embeds && data.embeds.length > 0) {
-        const embed = data.embeds[0];
-        let totalMinutes = 0;
-        let discordId = null;
-
-        // البحث عن الدقائق والـ Discord ID داخل الـ Fields
-        if (embed.fields) {
-            embed.fields.forEach(field => {
-                if (field.name.includes("Total Minutes")) {
-                    totalMinutes = parseInt(field.value.trim()) || 0;
-                }
-                if (field.name.includes("Discord")) {
-                    const match = field.value.match(/\d+/);
-                    if (match) discordId = match[0];
-                }
-            });
-        }
-
-        // إذا لم يجد في الحقول، يبحث في الوصف (Description)
-        if (!discordId && embed.description) {
-            const match = embed.description.match(/<@!?(\d+)>/);
-            if (match) discordId = match[1];
-        }
-
-        // التحديث في قاعدة البيانات عند العثور على العسكري
-        if (discordId && totalMinutes > 0) {
-            const calculatedHours = parseFloat((totalMinutes / 60).toFixed(1));
-
-            if (!db.police[discordId]) {
-                db.police[discordId] = {
-                    name: embed.title || "عسكري جديد",
-                    callsign: "U-Unknown",
-                    rank: "Cadet",
-                    hours: calculatedHours,
-                    points: 0,
-                    wings: [],
-                    reports: [],
-                    hireDate: new Date().toLocaleDateString('zh-Hans-CN'), // YYYY/MM/DD
-                    disabled: false
-                };
-            } else {
-                db.police[discordId].hours = calculatedHours;
-            }
-
-            saveData();
-            io.emit('updateData', getFormattedData());
-            console.log(`[Duty Log] تم تحديث ساعات العسكري (${discordId}):${calculatedHours} ساعة.`);
-        }
-    }
-    res.status(200).send({ status: 'success' });
 });
 
-function getFormattedData() {
-    const formattedPolice = {};
-    for (const id in db.police) {
-        const p = db.police[id];
-        formattedPolice[id] = {
-            ...p,
-            daysPassed: calculateDays(p.hireDate)
-        };
-    }
-    return { ...db, police: formattedPolice };
-}
+// 2. استقبال بيانات الشرطة المحدثة عبر Socket.io (أو التحديث التلقائي)
+socket.on('updateData', (data) => {
+    if (!data || !data.police) return;
 
-// Socket.io للتزامن المباشر
-io.on('connection', (socket) => {
-    socket.emit('initData', getFormattedData());
+    const allMembers = Object.keys(data.police).map(id => ({
+        discordId: id,
+        ...data.police[id]
+    }));
 
-    socket.on('updateOfficer', (data) => {
-        const { discordId, hours, points, disabled, wings, reportTitle, reportContent, updatedBy } = data;
+    currentAllPolice = allMembers;
+    // تصفية الرتب المخصصة للأكاديت والـ Solo Cadet
+    currentCadets = allMembers.filter(m => 
+        m.rank && (m.rank.toLowerCase().includes('cadet') || m.rank.toLowerCase().includes('كاديت'))
+    );
 
-        if (db.police[discordId]) {
-            if (hours !== undefined) db.police[discordId].hours = parseFloat(hours);
-            if (points !== undefined) db.police[discordId].points = parseInt(points);
-            if (disabled !== undefined) db.police[discordId].disabled = disabled;
-            if (wings !== undefined) db.police[discordId].wings = wings;
+    renderTable('allPoliceTableBody', currentAllPolice);
+    renderTable('cadetsOnlyTableBody', currentCadets);
+    updateStats(currentAllPolice);
+});
 
-            if (reportTitle && reportContent) {
-                db.police[discordId].reports.push({
-                    title: reportTitle,
-                    content: reportContent,
-                    date: new Date().toLocaleString('ar-SA')
-                });
-            }
+// دعم الحدث القديم للشرطة في حال استخدامه
+socket.on('policeDataUpdate', (data) => {
+    currentAllPolice = data.allPolice || [];
+    currentCadets = data.cadets || [];
 
-            db.logs.unshift({
-                admin: updatedBy || "المشرف",
-                action: "تعديل بيانات العسكري",
-                target: db.police[discordId].name,
-                time: new Date().toLocaleString('ar-SA')
-            });
+    renderTable('allPoliceTableBody', currentAllPolice);
+    renderTable('cadetsOnlyTableBody', currentCadets);
+    updateStats(currentAllPolice);
+});
 
-            saveData();
-            io.emit('updateData', getFormattedData());
-        }
+// 3. بناء الجدول وعرض البيانات والتاريخ والحالة
+function renderTable(tableBodyId, list) {
+    const tbody = document.getElementById(tableBodyId);
+    tbody.innerHTML = '';
+
+    list.forEach(item => {
+        const tr = document.createElement('tr');
+        
+        // عرض تاريخ التعيين وعدد الأيام المحسوبة من السيرفر
+        const hireDateDisplay = item.hireDate || item.joinedDate || "غير محدد";
+        const daysCount = item.daysPassed !== undefined ? item.daysPassed : (item.daysInPolice || 0);
+        const joinedDateText = `${hireDateDisplay} <span style="font-size:11px; color:var(--text-secondary);">(${daysCount} يوم)</span>`;
+
+        // حالة العسكري (نشط / معطل)
+        const statusBadge = item.disabled 
+            ? `<span class="badge-status" style="color:var(--accent-red);"><span class="status-dot status-no-active"></span> معطّل</span>`
+            : `<span class="badge-status" style="color:var(--accent-green);"><span class="status-dot status-active"></span> نشط</span>`;
+
+        tr.innerHTML = `
+            <td><strong>${item.callsign ? `[${item.callsign}] ` : ''}${item.name}</strong></td>
+            <td><span class="unit-tag">${item.rank || 'Solo Cadet'}</span></td>
+            <td>${joinedDateText}</td>
+            <td>${item.hours || 0} ساعة</td>
+            <td>${item.points || 0} نقطة</td>
+            <td>
+                <span class="badge-wings" onclick="showWings('${item.discordId}')">
+                    <i class="fa-solid fa-award"></i> ${item.wings ? item.wings.length : 0} وينقات
+                </span>
+            </td>
+            <td>
+                <button class="btn btn-primary" style="padding: 4px 8px; font-size:12px;" onclick="showReports('${item.discordId}')">
+                    ${item.reports ? item.reports.length : 0} تقارير
+                </button>
+            </td>
+            <td>${statusBadge}</td>
+            <td style="text-align: center;">
+                <button class="btn btn-warning" style="padding: 4px 10px; font-size:12px;" onclick="openEditModal('${item.discordId}')">
+                    <i class="fa-solid fa-pen"></i> تعديل
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
     });
+}
+
+// 4. تحديث الإحصائيات العلويّة
+function updateStats(policeList) {
+    document.getElementById('statTotal').innerText = policeList.length;
+    
+    let totalHours = policeList.reduce((acc, curr) => acc + (parseFloat(curr.hours) || 0), 0);
+    let totalPoints = policeList.reduce((acc, curr) => acc + (parseInt(curr.points) || 0), 0);
+
+    document.getElementById('statHours').innerText = totalHours.toFixed(1);
+    document.getElementById('statPoints').innerText = totalPoints;
+}
+
+// 5. فتح نافذة التعديل وتعبئة البيانات بالكامل
+function openEditModal(discordId) {
+    const member = currentAllPolice.find(m => m.discordId === discordId);
+    if (!member) return;
+
+    document.getElementById('editDiscordId').value = member.discordId;
+    document.getElementById('editHours').value = member.hours || 0;
+    document.getElementById('editPoints').value = member.points || 0;
+    document.getElementById('editDisabledStatus').value = member.disabled ? "true" : "false";
+    
+    document.getElementById('editReportTitle').value = '';
+    document.getElementById('editReportContent').value = '';
+
+    // تحديد خيارات الوينقات المحددة سابقاً
+    const memberWings = member.wings || [];
+    const checkboxes = document.querySelectorAll('#wingsContainer input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+        cb.checked = memberWings.includes(cb.value);
+    });
+
+    document.getElementById('editModal').style.display = 'flex';
+}
+
+// 6. حفظ التعديل وإرساله عبر Socket.io والسيرفر
+document.getElementById('editForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+
+    const discordId = document.getElementById('editDiscordId').value;
+    const hours = parseFloat(document.getElementById('editHours').value);
+    const points = parseInt(document.getElementById('editPoints').value);
+    const disabled = document.getElementById('editDisabledStatus').value === "true";
+    
+    // جمع الوينقات المحددة
+    const selectedWings = [];
+    document.querySelectorAll('#wingsContainer input[type="checkbox"]:checked').forEach(cb => {
+        selectedWings.push(cb.value);
+    });
+
+    const reportTitle = document.getElementById('editReportTitle').value.trim();
+    const reportContent = document.getElementById('editReportContent').value.trim();
+
+    const payload = {
+        discordId,
+        hours,
+        points,
+        disabled,
+        wings: selectedWings,
+        reportTitle,
+        reportContent,
+        updatedBy: currentUser.username || "المشرف"
+    };
+
+    // إرسال عبر Socket.io للتزامن اللحظي
+    socket.emit('updateOfficer', payload);
+    closeModal('editModal');
 });
 
-server.listen(3000, () => {
-    console.log('Server running on port 3000');
-});
+// 7. إغلاق النوافذ وإدارة التبويبات
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+function switchView(viewName, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const views = ['viewAllPolice', 'viewCadetsOnly', 'viewUsers', 'viewApproval', 'viewLogs'];
+    views.forEach(v => {
+        const el = document.getElementById(v);
+        if (el) el.style.display = 'none';
+    });
+
+    if (viewName === 'allPolice') document.getElementById('viewAllPolice').style.display = 'block';
+    if (viewName === 'cadetsOnly') document.getElementById('viewCadetsOnly').style.display = 'block';
+    if (viewName === 'users') document.getElementById('viewUsers').style.display = 'block';
+    if (viewName === 'approval') document.getElementById('viewApproval').style.display = 'block';
+    if (viewName === 'logs') document.getElementById('viewLogs').style.display = 'block';
+}
+
+// 8. عرض الوينقات والتقارير
+function showWings(discordId) {
+    const member = currentAllPolice.find(m => m.discordId === discordId);
+    if (!member) return;
+
+    const container = document.getElementById('wingsListDetails');
+    container.innerHTML = '';
+
+    if (member.wings && member.wings.length > 0) {
+        member.wings.forEach(w => {
+            const div = document.createElement('div');
+            div.className = 'badge-wings';
+            div.innerText = w;
+            container.appendChild(div);
+        });
+    } else {
+        container.innerHTML = '<p style="color:var(--text-secondary);">لا توجد وينقات مكتسبة.</p>';
+    }
+
+    document.getElementById('wingsModal').style.display = 'flex';
+}
+
+function showReports(discordId) {
+    const member = currentAllPolice.find(m => m.discordId === discordId);
+    if (!member) return;
+
+    const container = document.getElementById('reportsListDetails');
+    container.innerHTML = '';
+
+    if (member.reports && member.reports.length > 0) {
+        member.reports.forEach((rep) => {
+            const div = document.createElement('div');
+            div.style.cssText = 'background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border:1px solid var(--card-border);';
+            const text = rep.content || rep.details || rep.text || "بدون نص";
+            
+            div.innerHTML = `
+                <div style="font-weight:bold; color:var(--accent-blue); font-size:13px;">${rep.title || 'تقرير MDT'}</div>
+                <div style="font-size:12px; margin-top:4px; white-space:pre-line;">${text}</div>
+                <div style="font-size:10px; color:var(--text-secondary); margin-top:5px;">التاريخ: ${rep.date || 'غير محدد'}</div>
+            `;
+            container.appendChild(div);
+        });
+    } else {
+        container.innerHTML = '<p style="color:var(--text-secondary);">لا توجد تقارير مسجلة.</p>';
+    }
+
+    document.getElementById('reportsModal').style.display = 'flex';
+}
