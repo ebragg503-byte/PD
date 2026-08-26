@@ -15,6 +15,7 @@ app.use(express.static('public'));
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 const HOURS_CHANNEL_ID = '1530564311217471639'; // روم الساعات
+const MDT_CHANNEL_ID = '1530564348009906328';   // ضع هنا ID روم الـ MDT الخاص بك
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
 const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"];
@@ -72,7 +73,7 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة لجلب وحساب الساعات تلقائياً من روم الديسكورد
+// 1. نظام جلب ومزامنة الساعات المطور
 async function syncHoursFromChannel(guild) {
     try {
         const channel = await guild.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
@@ -82,21 +83,22 @@ async function syncHoursFromChannel(guild) {
         if (!messages) return;
 
         messages.forEach(msg => {
-            const userId = msg.author.id;
-            // البحث عن أول رقم (سواء صحيح أو عشري) داخل الرسالة
+            // معرف العسكري (إذا أشار لشخص في الرسالة ينسبها له، وإلا لكاتب الرسالة)
+            const mentionedUser = msg.mentions.users.first();
+            const targetUserId = mentionedUser ? mentionedUser.id : msg.author.id;
+
+            // جلب أي رقم صحيح أو عشري داخل النص
             const match = msg.content.match(/\d+(\.\d+)?/);
             if (match) {
                 const hoursParsed = parseFloat(match[0]);
-                if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
+                if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
                 
-                // تحديث الساعات إذا كانت القيمة الجديدة أعلى أو غير مخصصة
-                if (dbData[userId].hours === 0 || dbData[userId].hours < hoursParsed) {
-                    dbData[userId].hours = hoursParsed;
-                }
+                // الاعتماد على مجموع الساعات أو تحديث القيمة الأعلى
+                dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hoursParsed);
             }
         });
     } catch (err) {
-        console.error("خطأ أثناء جلب الساعات من الروم:", err);
+        console.error("خطأ أثناء مزامنة الساعات:", err);
     }
 }
 
@@ -107,7 +109,7 @@ async function fetchGuildMembers() {
         const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
         if (!guild) return;
 
-        await syncHoursFromChannel(guild); // مزامنة الساعات قبل التجميع
+        await syncHoursFromChannel(guild);
 
         const members = await guild.members.fetch();
         let allPoliceList = [];
@@ -166,6 +168,30 @@ async function fetchGuildMembers() {
     }
 }
 
+// 2. الاستماع الفوري لرسائل روم الـ MDT وتسجيل تقرير جديد تلقائياً
+client.on('messageCreate', async (message) => {
+    if (message.author.bot || message.channel.id !== MDT_CHANNEL_ID) return;
+
+    const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
+
+    if (!dbData[userId]) {
+        dbData[userId] = { hours: 0, points: 0, reports: [] };
+    }
+    if (!dbData[userId].reports) dbData[userId].reports = [];
+
+    const newReport = {
+        id: Date.now().toString(), // معرف فريد للتقرير لسهولة الحذف
+        title: `تقرير MDT تلقائي`,
+        details: message.content || "مرفق / تقرير مصور",
+        date: new Date().toLocaleDateString('ar-SA')
+    };
+
+    dbData[userId].reports.push(newReport);
+    saveData();
+    fetchGuildMembers();
+});
+
+// API تعديل البيانات يدوياً
 app.post('/api/update-member', (req, res) => {
     const { discordId, hours, points, newReport } = req.body;
     if (!discordId) return res.status(400).json({ error: "Missing discordId" });
@@ -179,6 +205,7 @@ app.post('/api/update-member', (req, res) => {
     if (newReport) {
         if (!dbData[discordId].reports) dbData[discordId].reports = [];
         dbData[discordId].reports.push({
+            id: Date.now().toString(),
             title: newReport.title,
             details: newReport.details,
             date: new Date().toLocaleDateString('ar-SA')
@@ -217,12 +244,11 @@ app.post('/api/check-session', (req, res) => {
     res.json({ approved: user ? user.approved : false });
 });
 
-// أحداث Socket.io للتحكم في الطلبات والاتصال
+// الأحداث التفاعلية للـ Socket (إضافة حذف التقرير والقبول)
 io.on('connection', (socket) => {
     socket.emit('usersUpdate', activeUsers);
     fetchGuildMembers();
 
-    // استقبال حدث قبول المستخدم من زر الموقع
     socket.on('approve-user', (copyId) => {
         const targetUser = activeUsers.find(u => u.copyId === copyId);
         if (targetUser) {
@@ -231,10 +257,22 @@ io.on('connection', (socket) => {
         }
     });
 
-    // استقبال حدث رفض/حذف المستخدم
     socket.on('reject-user', (copyId) => {
         activeUsers = activeUsers.filter(u => u.copyId !== copyId);
         io.emit('usersUpdate', activeUsers);
+    });
+
+    // 3. حدث حذف التقرير من الموقع
+    socket.on('delete-report', ({ discordId, reportIndex, reportId }) => {
+        if (dbData[discordId] && dbData[discordId].reports) {
+            if (reportId) {
+                dbData[discordId].reports = dbData[discordId].reports.filter(r => r.id !== reportId);
+            } else if (reportIndex !== undefined) {
+                dbData[discordId].reports.splice(reportIndex, 1);
+            }
+            saveData();
+            fetchGuildMembers();
+        }
     });
 });
 
