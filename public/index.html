@@ -57,10 +57,20 @@
 
         .table-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; text-align: right; }
-        th, td { padding: 16px 20px; border-bottom: 1px solid var(--card-border); font-size: 14px; }
+        th, td { padding: 16px 20px; border-bottom: 1px solid var(--card-border); font-size: 14px; vertical-align: middle; }
         th { background: rgba(15, 23, 42, 0.8); color: var(--text-secondary); }
 
-        .badge-wings { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); padding: 5px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s; font-weight: bold; }
+        .unit-tag {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-blue);
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin-left: 8px;
+            display: inline-block;
+        }
+
+        .badge-wings { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); padding: 5px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s; font-weight: bold; display: inline-flex; align-items: center; gap: 5px; }
         .badge-wings:hover { background: var(--accent-indigo); color: #fff; }
 
         .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 6px; }
@@ -70,19 +80,20 @@
         .badge-status { padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; }
 
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 999; }
-        .modal-card { background: #131b2e; border: 1px solid var(--card-border); border-radius: 16px; width: 500px; max-width: 90%; padding: 25px; }
+        .modal-card { background: #131b2e; border: 1px solid var(--card-border); border-radius: 16px; width: 500px; max-width: 90%; padding: 25px; max-height: 90vh; overflow-y: auto; }
 
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-secondary); }
-        .form-group input, .form-group textarea { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; outline: none; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid var(--card-border); border-radius: 8px; color: #fff; outline: none; }
 
         .wings-checkboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; }
         .wings-checkboxes label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: #fff; }
 
-        .btn { padding: 10px 18px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .btn { padding: 8px 14px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; display: inline-flex; align-items: center; gap: 6px; }
         .btn-primary { background: var(--accent-blue); color: #000; }
         .btn-danger { background: var(--accent-red); color: #fff; }
         .btn-success { background: var(--accent-green); color: #fff; }
+        .btn-warning { background: var(--accent-amber); color: #000; }
     </style>
 </head>
 <body>
@@ -100,7 +111,7 @@
                 <div class="form-group">
                     <input type="text" id="loginCopyId" placeholder="Discord Copy ID" required>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%;">طلب الدخول</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">طلب الدخول</button>
             </form>
             <div id="loginStatus" style="margin-top: 15px; font-size: 13px;"></div>
         </div>
@@ -147,17 +158,17 @@
             <button class="tab-btn" onclick="switchView('logs', this)"><i class="fa-solid fa-scroll"></i> سجل التعديلات (Logs)</button>
         </div>
 
-        <!-- جدول جميع أفراد الشرطة -->
         <div id="viewAllPolice" class="table-card">
             <table>
                 <thead>
                     <tr>
-                        <th>اسم العسكري</th>
+                        <th style="text-align: right;">اسم العسكري [اليونت / الاسم]</th>
                         <th>الرتبة</th>
                         <th>الساعات</th>
                         <th>النقاط</th>
                         <th>الوينقات المكتسبة</th>
                         <th>التقارير</th>
+                        <th>الحالة</th>
                         <th style="text-align: center;">إجراءات</th>
                     </tr>
                 </thead>
@@ -165,17 +176,17 @@
             </table>
         </div>
 
-        <!-- جدول الأكاديت والسولو كاديت فقط -->
         <div id="viewCadetsOnly" class="table-card" style="display: none;">
             <table>
                 <thead>
                     <tr>
-                        <th>اسم الكاديت</th>
+                        <th style="text-align: right;">اسم الكاديت [اليونت / الاسم]</th>
                         <th>الرتبة</th>
                         <th>الساعات</th>
                         <th>النقاط</th>
                         <th>الوينقات المكتسبة</th>
                         <th>التقارير</th>
+                        <th>الحالة</th>
                         <th style="text-align: center;">إجراءات</th>
                     </tr>
                 </thead>
@@ -225,7 +236,6 @@
         </div>
     </div>
 
-    <!-- Modals -->
     <div class="modal-overlay" id="editModal">
         <div class="modal-card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
@@ -246,8 +256,22 @@
                 </div>
 
                 <div class="form-group">
+                    <label>حالة العسكري:</label>
+                    <select id="editDisabledStatus">
+                        <option value="false">نشط (فعّال)</option>
+                        <option value="true">معطّل (حظر/إجازة)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label>الوينقات (Wings):</label>
-                    <div class="wings-checkboxes" id="wingsContainer"></div>
+                    <div class="wings-checkboxes" id="wingsContainer">
+                        <label><input type="checkbox" value="Air Support"> الأرشيب (Air Support)</label>
+                        <label><input type="checkbox" value="Interceptor"> الإنترسبتر</label>
+                        <label><input type="checkbox" value="Motorcycle"> الموتر سايكل</label>
+                        <label><input type="checkbox" value="Negotiation"> التفاوض/النفقيشن</label>
+                        <label><input type="checkbox" value="Dispatch"> الدسباتش</label>
+                    </div>
                 </div>
 
                 <div style="border-top:1px solid var(--card-border); padding-top:10px; margin-top:10px;">
@@ -260,7 +284,7 @@
                     </div>
                 </div>
 
-                <button type="submit" class="btn btn-primary" style="width: 100%;">حفظ التغييرات</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; margin-top: 10px;">حفظ التغييرات</button>
             </form>
         </div>
     </div>
