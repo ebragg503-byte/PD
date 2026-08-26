@@ -75,50 +75,57 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة جلب تاريخ الساعات المكتوبة سابقاً في الروم
-async function syncHoursHistory(guild) {
+// دالة جلب البيانات القديمة بأمان بدفعة صغيرة لتجنب الحظر
+async function fetchChannelHistorySafe(channelId, isHours = false) {
     try {
-        const channel = await guild.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
+        const guild = client.guilds.cache.get(GUILD_ID);
+        if (!guild) return;
+        const channel = await guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+        let lastId;
+        // جلب 50 رسالة فقط لحماية البوت من الـ Rate Limit
+        const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
         if (!messages) return;
 
         messages.forEach(msg => {
             if (msg.author.bot) return;
-            parseAndSaveHours(msg);
+
+            const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
+            if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
+
+            if (isHours) {
+                let fullText = msg.content || "";
+                if (msg.embeds && msg.embeds.length > 0) {
+                    msg.embeds.forEach(emb => fullText += " " + (emb.title || "") + " " + (emb.description || ""));
+                }
+                const matches = fullText.match(/\d+(\.\d+)?/g);
+                if (matches) {
+                    const validNumbers = matches.map(Number).filter(n => n > 0 && n < 500);
+                    if (validNumbers.length > 0) {
+                        dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, validNumbers[0]);
+                    }
+                }
+            } else {
+                // تسجيل كتقرير
+                const reportContent = msg.content || (msg.attachments.size > 0 ? "تقرير مصور / مرفق" : "تقرير جديد");
+                if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
+                
+                // منع تكرار نفس التقرير
+                const isDuplicate = dbData[targetUserId].reports.some(r => r.details === reportContent);
+                if (!isDuplicate) {
+                    dbData[targetUserId].reports.push({
+                        id: msg.id,
+                        title: `تقرير MDT`,
+                        details: reportContent,
+                        date: new Date(msg.createdTimestamp).toLocaleDateString('ar-SA')
+                    });
+                }
+            }
         });
         saveData();
-    } catch (err) {
-        console.error("خطأ في مزامنة الساعات القديمة:", err);
-    }
-}
-
-// استخراج قيمة الساعات من أي نص أو Embed
-function parseAndSaveHours(message) {
-    const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
-    let text = message.content || "";
-    
-    if (message.embeds && message.embeds.length > 0) {
-        message.embeds.forEach(emb => {
-            text += " " + (emb.title || "") + " " + (emb.description || "");
-            if (emb.fields) emb.fields.forEach(f => text += " " + f.name + " " + f.value);
-        });
-    }
-
-    const matches = text.match(/\d+(\.\d+)?/g);
-    if (matches) {
-        // فلترة الأرقام لإنشاء مدى منطقي للساعات (تجاهل الـ IDs الطويلة)
-        const validHours = matches.map(Number).filter(n => n > 0 && n < 500);
-        if (validHours.length > 0) {
-            const hrs = validHours[0];
-            if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
-            
-            // اعتماد الرقم الأعلى المذكور العسكري
-            if (hrs > (dbData[userId].hours || 0)) {
-                dbData[userId].hours = hrs;
-            }
-        }
+    } catch (e) {
+        console.error("خطأ في قراءة الأرشيف:", e);
     }
 }
 
@@ -189,22 +196,20 @@ async function fetchGuildMembers() {
     }
 }
 
-// استقبال أي رسالة فورية في الرومات
+// معالجة الرسائل المباشرة الفورية فور إرسالها
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // تسجيل أي رسالة في روم الـ MDT مهما كانت كتقرير
+    // روم الـ MDT (أي رسالة تسجل تقريراً فورياً)
     if (message.channel.id === MDT_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
         if (!dbData[userId].reports) dbData[userId].reports = [];
 
-        const content = message.content.trim() || (message.attachments.size > 0 ? "مرفق / صورة" : "تقرير جديد");
-
         dbData[userId].reports.push({
-            id: Date.now().toString(),
+            id: message.id,
             title: `تقرير MDT`,
-            details: content,
+            details: message.content || "مرفق / صورة",
             date: new Date().toLocaleDateString('ar-SA')
         });
 
@@ -212,11 +217,24 @@ client.on('messageCreate', async (message) => {
         fetchGuildMembers();
     }
 
-    // تسجبل الساعات فور إرسالها في روم الساعات
+    // روم الساعات
     if (message.channel.id === HOURS_CHANNEL_ID) {
-        parseAndSaveHours(message);
-        saveData();
-        fetchGuildMembers();
+        const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
+        let text = message.content || "";
+        if (message.embeds && message.embeds.length > 0) {
+            message.embeds.forEach(emb => text += " " + (emb.title || "") + " " + (emb.description || ""));
+        }
+
+        const matches = text.match(/\d+(\.\d+)?/g);
+        if (matches) {
+            const hrs = parseFloat(matches[0]);
+            if (hrs > 0 && hrs < 500) {
+                if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
+                dbData[userId].hours = Math.max(dbData[userId].hours || 0, hrs);
+                saveData();
+                fetchGuildMembers();
+            }
+        }
     }
 });
 
@@ -308,10 +326,9 @@ io.on('connection', (socket) => {
 
 client.on('ready', async () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
-    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID).catch(() => null);
-    if (guild) {
-        await syncHoursHistory(guild);
-    }
+    // جلب الأرشيف القديم مرة واحدة بالتدريج
+    await fetchChannelHistorySafe(HOURS_CHANNEL_ID, true);
+    await fetchChannelHistorySafe(MDT_CHANNEL_ID, false);
     fetchGuildMembers();
 });
 
