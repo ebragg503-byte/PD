@@ -14,36 +14,24 @@ app.use(express.static('public'));
 
 const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
+const HOURS_CHANNEL_ID = '1530564311217471639'; // روم الساعات
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
-const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"]; // Cadet & Solo Cadet
+const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"];
 const ADMIN_IDS = ["771747917040058388"];
 
-// معرفات أسراب / ونقات الشرطة (Wings IDs)
 const WINGS_MAP = {
-    "1520526847597871214": "Air Support",        // الجوي / الأرشيب
-    "1520526845626552554": "Interceptor",        // الانترسبتر
-    "1520526848709230622": "Motorcycle",         // الموتر سايكل
-    "1520526849598427217": "Negotiation",        // التفاوض / النفقيشن
-    "1526679318456176680": "Dispatch"            // الدسباتش
+    "1520526847597871214": "Air Support",
+    "1520526845626552554": "Interceptor",
+    "1520526848709230622": "Motorcycle",
+    "1520526849598427217": "Negotiation",
+    "1526679318456176680": "Dispatch"
 };
 
-// ترتيب الرتب الرسمي من الأعلى للأقل لفرز الأعضاء بالجدول
 const ROLES_ORDER = [
-    "First Lieutenant",
-    "Lieutenant",
-    "Staff Sergeant",
-    "First Sergeant",
-    "Sergeant",
-    "Filed Commander",
-    "Assist Police Supervisor",
-    "Senior Lead Officer",
-    "Senior Officer",
-    "Officer III",
-    "Officer II",
-    "Officer I",
-    "Solo Cadet",
-    "Cadet"
+    "First Lieutenant", "Lieutenant", "Staff Sergeant", "First Sergeant",
+    "Sergeant", "Filed Commander", "Assist Police Supervisor", "Senior Lead Officer",
+    "Senior Officer", "Officer III", "Officer II", "Officer I", "Solo Cadet", "Cadet"
 ];
 
 const client = new Client({
@@ -68,7 +56,6 @@ function saveData() {
 
 let activeUsers = [];
 
-// دالة لمعرفة أعلى رتبة للمستخدم بناءً على مصفوفة الترتيب
 function getMemberRank(member) {
     const memberRoleNames = member.roles.cache.map(r => r.name);
     for (const roleName of ROLES_ORDER) {
@@ -77,15 +64,40 @@ function getMemberRank(member) {
     return member.roles.highest.name;
 }
 
-// دالة لجلب ونقات العسكري من الأدوار الحاصل عليها في الديسكورد
 function getMemberWings(member) {
     let wings = [];
     member.roles.cache.forEach(role => {
-        if (WINGS_MAP[role.id]) {
-            wings.push(WINGS_MAP[role.id]);
-        }
+        if (WINGS_MAP[role.id]) wings.push(WINGS_MAP[role.id]);
     });
     return wings;
+}
+
+// دالة لجلب وحساب الساعات تلقائياً من روم الديسكورد
+async function syncHoursFromChannel(guild) {
+    try {
+        const channel = await guild.channels.fetch(HOURS_CHANNEL_ID).catch(() => null);
+        if (!channel || !channel.isTextBased()) return;
+
+        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+        if (!messages) return;
+
+        messages.forEach(msg => {
+            const userId = msg.author.id;
+            // البحث عن أول رقم (سواء صحيح أو عشري) داخل الرسالة
+            const match = msg.content.match(/\d+(\.\d+)?/);
+            if (match) {
+                const hoursParsed = parseFloat(match[0]);
+                if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
+                
+                // تحديث الساعات إذا كانت القيمة الجديدة أعلى أو غير مخصصة
+                if (dbData[userId].hours === 0 || dbData[userId].hours < hoursParsed) {
+                    dbData[userId].hours = hoursParsed;
+                }
+            }
+        });
+    } catch (err) {
+        console.error("خطأ أثناء جلب الساعات من الروم:", err);
+    }
 }
 
 async function fetchGuildMembers() {
@@ -95,6 +107,8 @@ async function fetchGuildMembers() {
         const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID);
         if (!guild) return;
 
+        await syncHoursFromChannel(guild); // مزامنة الساعات قبل التجميع
+
         const members = await guild.members.fetch();
         let allPoliceList = [];
         let cadetsList = [];
@@ -103,7 +117,6 @@ async function fetchGuildMembers() {
             if (member.user.bot) return;
 
             if (member.roles.cache.has(POLICE_ROLE_ID)) {
-                // التأكد من عدم تصفير البيانات إذا كانت موجودة مسبقاً
                 if (!dbData[member.id]) {
                     dbData[member.id] = { hours: 0, points: 0, reports: [] };
                 }
@@ -130,7 +143,6 @@ async function fetchGuildMembers() {
             }
         });
 
-        // ترتيب مصفوفة الأفراد حسب تسلسل الرتب
         const sortByRank = (a, b) => {
             let indexA = ROLES_ORDER.indexOf(a.rank);
             let indexB = ROLES_ORDER.indexOf(b.rank);
@@ -154,7 +166,6 @@ async function fetchGuildMembers() {
     }
 }
 
-// API لتعديل بيانات العسكري (الساعات والنقاط والتقارير)
 app.post('/api/update-member', (req, res) => {
     const { discordId, hours, points, newReport } = req.body;
     if (!discordId) return res.status(400).json({ error: "Missing discordId" });
@@ -206,14 +217,31 @@ app.post('/api/check-session', (req, res) => {
     res.json({ approved: user ? user.approved : false });
 });
 
+// أحداث Socket.io للتحكم في الطلبات والاتصال
 io.on('connection', (socket) => {
+    socket.emit('usersUpdate', activeUsers);
     fetchGuildMembers();
+
+    // استقبال حدث قبول المستخدم من زر الموقع
+    socket.on('approve-user', (copyId) => {
+        const targetUser = activeUsers.find(u => u.copyId === copyId);
+        if (targetUser) {
+            targetUser.approved = true;
+            io.emit('usersUpdate', activeUsers);
+        }
+    });
+
+    // استقبال حدث رفض/حذف المستخدم
+    socket.on('reject-user', (copyId) => {
+        activeUsers = activeUsers.filter(u => u.copyId !== copyId);
+        io.emit('usersUpdate', activeUsers);
+    });
 });
 
 client.on('ready', () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
     fetchGuildMembers();
-    setInterval(fetchGuildMembers, 60000); // تحديث كل دقيقة لتفادي الـ Rate Limit
+    setInterval(fetchGuildMembers, 60000);
 });
 
 const PORT = process.env.PORT || 3000;
