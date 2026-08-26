@@ -75,41 +75,58 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة استخراج النص الكامل من الرسائل والـ Embeds
-function extractMessageText(msg) {
-    let text = msg.content || "";
+// دالة استخراج النص الكامل للرسالة شاملاً الـ Embeds والمرفقات لضمان عرض ما كتبه العسكري
+function getFullContent(msg) {
+    let parts = [];
+    if (msg.content && msg.content.trim() !== "") {
+        parts.push(msg.content.trim());
+    }
     if (msg.embeds && msg.embeds.length > 0) {
         msg.embeds.forEach(emb => {
-            text += " " + (emb.title || "") + " " + (emb.description || "");
+            if (emb.title) parts.push(`[${emb.title}]`);
+            if (emb.description) parts.push(emb.description);
             if (emb.fields) {
-                emb.fields.forEach(f => text += " " + f.name + " " + f.value);
+                emb.fields.forEach(f => parts.push(`${f.name}: ${f.value}`));
             }
         });
     }
     if (msg.attachments && msg.attachments.size > 0) {
-        text += text ? " (مع مرفقات)" : "تقرير مصور / مرفق";
+        parts.push("[يحتوي على صورة/مرفق]");
     }
-    return text.trim() || "لا يوجد نص في الرسالة";
+    return parts.length > 0 ? parts.join('\n') : "رسالة فارغة";
 }
 
-// دالة استخراج أرقام الساعات بدقة
-function extractHoursFromText(text) {
-    // تصفية المعرفات الطويلة (IDs) والتركيز على الأرقام المنطقية
-    const matches = text.match(/\d+(\.\d+)?/g);
-    if (!matches) return null;
-    const valid = matches.map(Number).filter(n => n > 0 && n < 300);
-    return valid.length > 0 ? valid[0] : null;
+// استخراج الساعات بشكل مرن ومباشر
+function extractHours(text) {
+    if (!text) return null;
+    
+    // البحث عن أرقام بجانب كلمة ساعة أو hours
+    const keywordMatch = text.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
+    if (keywordMatch) return parseFloat(keywordMatch[1]);
+
+    // إذا لم يجد كلمة، يأخذ أي رقم منطقي مباشر بالرسالة
+    const numbers = text.match(/\d+(\.\d+)?/g);
+    if (numbers) {
+        for (let numStr of numbers) {
+            let val = parseFloat(numStr);
+            // تجاهل أرقام الـ IDs الطويلة وركز على الساعات
+            if (val > 0 && val < 1000 && numStr.length < 6) {
+                return val;
+            }
+        }
+    }
+    return null;
 }
 
-// جلب وتحديث الساعات والتقارير بأمان
-async function fetchChannelHistorySafe(channelId, isHours = false) {
+// جلب الأرشيف القديم للرومات
+async function fetchChannelHistory(channelId, isHours = false) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID);
         if (!guild) return;
         const channel = await guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
         if (!messages) return;
 
         messages.forEach(msg => {
@@ -118,24 +135,24 @@ async function fetchChannelHistorySafe(channelId, isHours = false) {
             const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
             if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
 
-            const textContent = extractMessageText(msg);
+            const fullText = getFullContent(msg);
 
             if (isHours) {
-                const hrs = extractHoursFromText(textContent);
+                const hrs = extractHours(fullText);
                 if (hrs !== null) {
                     dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hrs);
                 }
             } else {
                 if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
-                
                 const exists = dbData[targetUserId].reports.some(r => r.id === msg.id);
                 if (!exists) {
                     dbData[targetUserId].reports.push({
                         id: msg.id,
                         title: `تقرير MDT`,
-                        details: textContent,
-                        text: textContent,
-                        description: textContent,
+                        details: fullText,
+                        text: fullText,
+                        description: fullText,
+                        content: fullText,
                         date: new Date(msg.createdTimestamp).toLocaleDateString('ar-SA')
                     });
                 }
@@ -143,7 +160,7 @@ async function fetchChannelHistorySafe(channelId, isHours = false) {
         });
         saveData();
     } catch (e) {
-        console.error("خطأ قراءة التاريخ:", e);
+        console.error("خطأ قراءة الأرشيف:", e);
     }
 }
 
@@ -214,7 +231,7 @@ async function fetchGuildMembers() {
     }
 }
 
-// استجابة الرسائل الجديدة المباشرة
+// الاستجابة المباشرة للرسائل الجديدة
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
@@ -224,14 +241,15 @@ client.on('messageCreate', async (message) => {
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
         if (!dbData[userId].reports) dbData[userId].reports = [];
 
-        const textContent = extractMessageText(message);
+        const fullText = getFullContent(message);
 
         dbData[userId].reports.push({
             id: message.id,
             title: `تقرير MDT`,
-            details: textContent,
-            text: textContent,
-            description: textContent,
+            details: fullText,
+            text: fullText,
+            description: fullText,
+            content: fullText,
             date: new Date().toLocaleDateString('ar-SA')
         });
 
@@ -242,8 +260,8 @@ client.on('messageCreate', async (message) => {
     // روم الساعات
     if (message.channel.id === HOURS_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
-        const textContent = extractMessageText(message);
-        const hrs = extractHoursFromText(textContent);
+        const fullText = getFullContent(message);
+        const hrs = extractHours(fullText);
 
         if (hrs !== null) {
             if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
@@ -264,13 +282,14 @@ app.post('/api/update-member', (req, res) => {
     if (points !== undefined) dbData[discordId].points = parseInt(points);
     if (newReport) {
         if (!dbData[discordId].reports) dbData[discordId].reports = [];
-        const reportContent = newReport.details || newReport.text || "تقرير جديد";
+        const reportContent = newReport.details || newReport.text || newReport.content || "تقرير جديد";
         dbData[discordId].reports.push({
             id: Date.now().toString(),
             title: newReport.title || "تقرير MDT",
             details: reportContent,
             text: reportContent,
             description: reportContent,
+            content: reportContent,
             date: new Date().toLocaleDateString('ar-SA')
         });
     }
@@ -301,7 +320,7 @@ app.post('/api/login-request', (req, res) => {
 app.post('/api/check-session', (req, res) => {
     const { copyId } = req.body;
     if (ADMIN_IDS.includes(copyId)) return res.json({ approved: true });
-    const user = activeUsers.find(u => u.copyId === copyId);
+    const user = activeUsers.find(userObj => userObj.copyId === copyId);
     res.json({ approved: user ? user.approved : false });
 });
 
@@ -345,8 +364,8 @@ io.on('connection', (socket) => {
 
 client.on('ready', async () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
-    await fetchChannelHistorySafe(HOURS_CHANNEL_ID, true);
-    await fetchChannelHistorySafe(MDT_CHANNEL_ID, false);
+    await fetchChannelHistory(HOURS_CHANNEL_ID, true);
+    await fetchChannelHistory(MDT_CHANNEL_ID, false);
     fetchGuildMembers();
 });
 
