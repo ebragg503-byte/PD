@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
+const path = meRequire('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +16,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 const HOURS_CHANNEL_ID = '1530564311217471639'; 
 const MDT_CHANNEL_ID = '1536506668039274556'; 
+const ADS_CHANNEL_ID = '1521415106876014612'; // روم إعلانات التعيين/القبول
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
 const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"];
@@ -75,7 +76,7 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة استخراج النص الكامل للرسالة شاملاً الـ Embeds والمرفقات لضمان عرض ما كتبه العسكري
+// دالة استخراج النص الكامل للرسائل والـ Embeds لضمان عدم ظهور undefined
 function getFullContent(msg) {
     let parts = [];
     if (msg.content && msg.content.trim() !== "") {
@@ -91,34 +92,57 @@ function getFullContent(msg) {
         });
     }
     if (msg.attachments && msg.attachments.size > 0) {
-        parts.push("[يحتوي على صورة/مرفق]");
+        parts.push("[مرفق/صورة]");
     }
-    return parts.length > 0 ? parts.join('\n') : "رسالة فارغة";
+    return parts.length > 0 ? parts.join('\n') : "تقرير بدون نص";
 }
 
-// استخراج الساعات بشكل مرن ومباشر
+// استخراج الساعات من الرسالة
 function extractHours(text) {
     if (!text) return null;
-    
-    // البحث عن أرقام بجانب كلمة ساعة أو hours
     const keywordMatch = text.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
     if (keywordMatch) return parseFloat(keywordMatch[1]);
 
-    // إذا لم يجد كلمة، يأخذ أي رقم منطقي مباشر بالرسالة
     const numbers = text.match(/\d+(\.\d+)?/g);
     if (numbers) {
         for (let numStr of numbers) {
             let val = parseFloat(numStr);
-            // تجاهل أرقام الـ IDs الطويلة وركز على الساعات
-            if (val > 0 && val < 1000 && numStr.length < 6) {
-                return val;
-            }
+            if (val > 0 && val < 1000 && numStr.length < 6) return val;
         }
     }
     return null;
 }
 
-// جلب الأرشيف القديم للرومات
+// بحث وفحص تاريخ دخول العسكري من روم الإعلانات
+async function syncJoinDates(guild) {
+    try {
+        const channel = await guild.channels.fetch(ADS_CHANNEL_ID).catch(() => null);
+        if (!channel || !channel.isTextBased()) return;
+
+        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+        if (!messages) return;
+
+        // الترتيب من الأقدم للأحدث لتحديد أول إعلان
+        const sortedMsgs = Array.from(messages.values()).reverse();
+
+        sortedMsgs.forEach(msg => {
+            const content = getFullContent(msg);
+            
+            // فحص الأعضاء المذكورين بالمنشن أو النص
+            msg.mentions.users.forEach(user => {
+                if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
+                if (!dbData[user.id].joinedTimestamp) {
+                    dbData[user.id].joinedTimestamp = msg.createdTimestamp;
+                }
+            });
+        });
+        saveData();
+    } catch (err) {
+        console.error("خطأ في جلب تواريخ الدخول من روم ADS:", err);
+    }
+}
+
+// جلب أرشيف الساعات والتقارير
 async function fetchChannelHistory(channelId, isHours = false) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID);
@@ -175,6 +199,8 @@ async function fetchGuildMembers() {
         let allPoliceList = [];
         let cadetsList = [];
 
+        const now = Date.now();
+
         members.forEach(member => {
             if (member.user.bot) return;
 
@@ -186,6 +212,11 @@ async function fetchGuildMembers() {
                 const memberWings = getMemberWings(member);
                 const memberRank = getMemberRank(member);
 
+                // حساب تاريخ الدخول وعدد الأيام
+                const joinedTs = dbData[member.id].joinedTimestamp || member.joinedTimestamp || now;
+                const daysInPolice = Math.floor((now - joinedTs) / (1000 * 60 * 60 * 24));
+                const joinedDateStr = new Date(joinedTs).toLocaleDateString('ar-SA');
+
                 const cadetData = {
                     discordId: member.id,
                     name: member.displayName || member.user.username,
@@ -194,7 +225,9 @@ async function fetchGuildMembers() {
                     points: dbData[member.id] ? (dbData[member.id].points || 0) : 0,
                     wings: memberWings,
                     wingsCount: memberWings.length,
-                    reports: dbData[member.id] ? (dbData[member.id].reports || []) : []
+                    reports: dbData[member.id] ? (dbData[member.id].reports || []) : [],
+                    joinedDate: joinedDateStr,
+                    daysInPolice: daysInPolice
                 };
 
                 allPoliceList.push(cadetData);
@@ -231,11 +264,11 @@ async function fetchGuildMembers() {
     }
 }
 
-// الاستجابة المباشرة للرسائل الجديدة
+// استجابة فورية للرسائل الجديدة
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // روم الـ MDT
+    // استقبال التقارير في روم MDT
     if (message.channel.id === MDT_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
@@ -257,7 +290,7 @@ client.on('messageCreate', async (message) => {
         fetchGuildMembers();
     }
 
-    // روم الساعات
+    // استقبال الساعات في روم الساعات
     if (message.channel.id === HOURS_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         const fullText = getFullContent(message);
@@ -269,6 +302,18 @@ client.on('messageCreate', async (message) => {
             saveData();
             fetchGuildMembers();
         }
+    }
+
+    // التقاط إعلانات التعيين في روم Ads
+    if (message.channel.id === ADS_CHANNEL_ID) {
+        message.mentions.users.forEach(user => {
+            if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
+            if (!dbData[user.id].joinedTimestamp) {
+                dbData[user.id].joinedTimestamp = message.createdTimestamp;
+            }
+        });
+        saveData();
+        fetchGuildMembers();
     }
 });
 
@@ -364,6 +409,10 @@ io.on('connection', (socket) => {
 
 client.on('ready', async () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
+    const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (guild) {
+        await syncJoinDates(guild);
+    }
     await fetchChannelHistory(HOURS_CHANNEL_ID, true);
     await fetchChannelHistory(MDT_CHANNEL_ID, false);
     fetchGuildMembers();
