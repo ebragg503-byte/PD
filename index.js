@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { Client, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
-const path = meRequire('path');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,7 +16,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const GUILD_ID = '1517858234378227834';
 const HOURS_CHANNEL_ID = '1530564311217471639'; 
 const MDT_CHANNEL_ID = '1536506668039274556'; 
-const ADS_CHANNEL_ID = '1521415106876014612'; // روم إعلانات التعيين/القبول
+const ADS_CHANNEL_ID = '1521415106876014612'; 
 
 const POLICE_ROLE_ID = "1520526844313469080"; 
 const CADET_ROLE_IDS = ["1520526818225164329", "1522994966597468191"];
@@ -76,7 +76,6 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة استخراج النص الكامل للرسائل والـ Embeds لضمان عدم ظهور undefined
 function getFullContent(msg) {
     let parts = [];
     if (msg.content && msg.content.trim() !== "") {
@@ -97,7 +96,6 @@ function getFullContent(msg) {
     return parts.length > 0 ? parts.join('\n') : "تقرير بدون نص";
 }
 
-// استخراج الساعات من الرسالة
 function extractHours(text) {
     if (!text) return null;
     const keywordMatch = text.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
@@ -113,7 +111,6 @@ function extractHours(text) {
     return null;
 }
 
-// بحث وفحص تاريخ دخول العسكري من روم الإعلانات
 async function syncJoinDates(guild) {
     try {
         const channel = await guild.channels.fetch(ADS_CHANNEL_ID).catch(() => null);
@@ -122,13 +119,9 @@ async function syncJoinDates(guild) {
         const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
         if (!messages) return;
 
-        // الترتيب من الأقدم للأحدث لتحديد أول إعلان
         const sortedMsgs = Array.from(messages.values()).reverse();
 
         sortedMsgs.forEach(msg => {
-            const content = getFullContent(msg);
-            
-            // فحص الأعضاء المذكورين بالمنشن أو النص
             msg.mentions.users.forEach(user => {
                 if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
                 if (!dbData[user.id].joinedTimestamp) {
@@ -142,7 +135,6 @@ async function syncJoinDates(guild) {
     }
 }
 
-// جلب أرشيف الساعات والتقارير
 async function fetchChannelHistory(channelId, isHours = false) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID);
@@ -212,7 +204,6 @@ async function fetchGuildMembers() {
                 const memberWings = getMemberWings(member);
                 const memberRank = getMemberRank(member);
 
-                // حساب تاريخ الدخول وعدد الأيام
                 const joinedTs = dbData[member.id].joinedTimestamp || member.joinedTimestamp || now;
                 const daysInPolice = Math.floor((now - joinedTs) / (1000 * 60 * 60 * 24));
                 const joinedDateStr = new Date(joinedTs).toLocaleDateString('ar-SA');
@@ -264,11 +255,9 @@ async function fetchGuildMembers() {
     }
 }
 
-// استجابة فورية للرسائل الجديدة
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // استقبال التقارير في روم MDT
     if (message.channel.id === MDT_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
@@ -290,7 +279,6 @@ client.on('messageCreate', async (message) => {
         fetchGuildMembers();
     }
 
-    // استقبال الساعات في روم الساعات
     if (message.channel.id === HOURS_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         const fullText = getFullContent(message);
@@ -304,7 +292,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // التقاط إعلانات التعيين في روم Ads
     if (message.channel.id === ADS_CHANNEL_ID) {
         message.mentions.users.forEach(user => {
             if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
