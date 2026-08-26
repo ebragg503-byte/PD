@@ -75,7 +75,33 @@ function getMemberWings(member) {
     return wings;
 }
 
-// دالة جلب البيانات القديمة بأمان بدفعة صغيرة لتجنب الحظر
+// دالة استخراج النص الكامل من الرسائل والـ Embeds
+function extractMessageText(msg) {
+    let text = msg.content || "";
+    if (msg.embeds && msg.embeds.length > 0) {
+        msg.embeds.forEach(emb => {
+            text += " " + (emb.title || "") + " " + (emb.description || "");
+            if (emb.fields) {
+                emb.fields.forEach(f => text += " " + f.name + " " + f.value);
+            }
+        });
+    }
+    if (msg.attachments && msg.attachments.size > 0) {
+        text += text ? " (مع مرفقات)" : "تقرير مصور / مرفق";
+    }
+    return text.trim() || "لا يوجد نص في الرسالة";
+}
+
+// دالة استخراج أرقام الساعات بدقة
+function extractHoursFromText(text) {
+    // تصفية المعرفات الطويلة (IDs) والتركيز على الأرقام المنطقية
+    const matches = text.match(/\d+(\.\d+)?/g);
+    if (!matches) return null;
+    const valid = matches.map(Number).filter(n => n > 0 && n < 300);
+    return valid.length > 0 ? valid[0] : null;
+}
+
+// جلب وتحديث الساعات والتقارير بأمان
 async function fetchChannelHistorySafe(channelId, isHours = false) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID);
@@ -83,8 +109,6 @@ async function fetchChannelHistorySafe(channelId, isHours = false) {
         const channel = await guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        let lastId;
-        // جلب 50 رسالة فقط لحماية البوت من الـ Rate Limit
         const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
         if (!messages) return;
 
@@ -94,30 +118,24 @@ async function fetchChannelHistorySafe(channelId, isHours = false) {
             const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
             if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
 
+            const textContent = extractMessageText(msg);
+
             if (isHours) {
-                let fullText = msg.content || "";
-                if (msg.embeds && msg.embeds.length > 0) {
-                    msg.embeds.forEach(emb => fullText += " " + (emb.title || "") + " " + (emb.description || ""));
-                }
-                const matches = fullText.match(/\d+(\.\d+)?/g);
-                if (matches) {
-                    const validNumbers = matches.map(Number).filter(n => n > 0 && n < 500);
-                    if (validNumbers.length > 0) {
-                        dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, validNumbers[0]);
-                    }
+                const hrs = extractHoursFromText(textContent);
+                if (hrs !== null) {
+                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hrs);
                 }
             } else {
-                // تسجيل كتقرير
-                const reportContent = msg.content || (msg.attachments.size > 0 ? "تقرير مصور / مرفق" : "تقرير جديد");
                 if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
                 
-                // منع تكرار نفس التقرير
-                const isDuplicate = dbData[targetUserId].reports.some(r => r.details === reportContent);
-                if (!isDuplicate) {
+                const exists = dbData[targetUserId].reports.some(r => r.id === msg.id);
+                if (!exists) {
                     dbData[targetUserId].reports.push({
                         id: msg.id,
                         title: `تقرير MDT`,
-                        details: reportContent,
+                        details: textContent,
+                        text: textContent,
+                        description: textContent,
                         date: new Date(msg.createdTimestamp).toLocaleDateString('ar-SA')
                     });
                 }
@@ -125,7 +143,7 @@ async function fetchChannelHistorySafe(channelId, isHours = false) {
         });
         saveData();
     } catch (e) {
-        console.error("خطأ في قراءة الأرشيف:", e);
+        console.error("خطأ قراءة التاريخ:", e);
     }
 }
 
@@ -196,20 +214,24 @@ async function fetchGuildMembers() {
     }
 }
 
-// معالجة الرسائل المباشرة الفورية فور إرسالها
+// استجابة الرسائل الجديدة المباشرة
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // روم الـ MDT (أي رسالة تسجل تقريراً فورياً)
+    // روم الـ MDT
     if (message.channel.id === MDT_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
         if (!dbData[userId].reports) dbData[userId].reports = [];
 
+        const textContent = extractMessageText(message);
+
         dbData[userId].reports.push({
             id: message.id,
             title: `تقرير MDT`,
-            details: message.content || "مرفق / صورة",
+            details: textContent,
+            text: textContent,
+            description: textContent,
             date: new Date().toLocaleDateString('ar-SA')
         });
 
@@ -220,20 +242,14 @@ client.on('messageCreate', async (message) => {
     // روم الساعات
     if (message.channel.id === HOURS_CHANNEL_ID) {
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
-        let text = message.content || "";
-        if (message.embeds && message.embeds.length > 0) {
-            message.embeds.forEach(emb => text += " " + (emb.title || "") + " " + (emb.description || ""));
-        }
+        const textContent = extractMessageText(message);
+        const hrs = extractHoursFromText(textContent);
 
-        const matches = text.match(/\d+(\.\d+)?/g);
-        if (matches) {
-            const hrs = parseFloat(matches[0]);
-            if (hrs > 0 && hrs < 500) {
-                if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
-                dbData[userId].hours = Math.max(dbData[userId].hours || 0, hrs);
-                saveData();
-                fetchGuildMembers();
-            }
+        if (hrs !== null) {
+            if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
+            dbData[userId].hours = Math.max(dbData[userId].hours || 0, hrs);
+            saveData();
+            fetchGuildMembers();
         }
     }
 });
@@ -248,10 +264,13 @@ app.post('/api/update-member', (req, res) => {
     if (points !== undefined) dbData[discordId].points = parseInt(points);
     if (newReport) {
         if (!dbData[discordId].reports) dbData[discordId].reports = [];
+        const reportContent = newReport.details || newReport.text || "تقرير جديد";
         dbData[discordId].reports.push({
             id: Date.now().toString(),
-            title: newReport.title,
-            details: newReport.details,
+            title: newReport.title || "تقرير MDT",
+            details: reportContent,
+            text: reportContent,
+            description: reportContent,
             date: new Date().toLocaleDateString('ar-SA')
         });
     }
@@ -326,7 +345,6 @@ io.on('connection', (socket) => {
 
 client.on('ready', async () => {
     console.log(`[ONLINE SUCCESS] تم تسجيل دخول البوت: ${client.user.tag}`);
-    // جلب الأرشيف القديم مرة واحدة بالتدريج
     await fetchChannelHistorySafe(HOURS_CHANNEL_ID, true);
     await fetchChannelHistorySafe(MDT_CHANNEL_ID, false);
     fetchGuildMembers();
