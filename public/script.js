@@ -5,10 +5,12 @@ let availableWings = [];
 let globalAllPolice = [];
 let globalCadetsOnly = [];
 
+// جلب قائمة الوينقات المتاحة من السيرفر
 fetch('/api/wings-list')
     .then(res => res.json())
     .then(data => { availableWings = data; });
 
+// نموذج تسجيل الدخول
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('loginUsername').value.trim();
@@ -28,7 +30,6 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     currentUser = { username, copyId, approved: data.approved };
 
     if (data.approved) {
-        // إخفاء نافذة الدخول فوراً بدون انتظار
         document.getElementById('loginModal').style.display = 'none';
         document.getElementById('displayLoggedUser').textContent = username;
         document.getElementById('displayLoggedStatus').textContent = `معرّف: ${copyId}`;
@@ -51,6 +52,7 @@ function startHeartbeat() {
     }, 15000);
 }
 
+// الاستماع لتحديثات بيانات الشرطة من السيرفر
 socket.on('policeDataUpdate', (data) => {
     globalAllPolice = data.allPolice;
     globalCadetsOnly = data.cadets;
@@ -60,6 +62,7 @@ socket.on('policeDataUpdate', (data) => {
     updateStats(globalAllPolice);
 });
 
+// الاستماع لتحديثات المستخدمين المتواجدين
 socket.on('usersUpdate', (users) => {
     renderUsers(users);
     renderApprovals(users);
@@ -76,31 +79,41 @@ socket.on('usersUpdate', (users) => {
     }
 });
 
+// الاستماع لتحديثات السجلات (Logs)
 socket.on('logsUpdate', (logs) => {
     renderLogs(logs);
 });
 
+// بناء أسطر جداول العسكريين
 function renderTableRows(tableBodyId, dataList) {
     const tbody = document.getElementById(tableBodyId);
     tbody.innerHTML = '';
 
     if (!dataList || dataList.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-secondary);">لا يوجد أعضاء في هذه القائمة</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-secondary);">لا يوجد أعضاء في هذه القائمة</td></tr>';
         return;
     }
 
     dataList.forEach(c => {
         const wingsCount = (c.wings || []).length;
         const reportsCount = (c.reports || []).length;
+        const unitTag = c.unit ? `<span class="unit-tag">${c.unit}</span>` : '';
+        
+        // إعداد شارة الحالة (معطل أم نشط)
+        const isDisabled = c.disabled === true || c.disabled === 'true';
+        const statusBadge = isDisabled 
+            ? '<span class="badge-status" style="background: rgba(239, 68, 68, 0.2); color: var(--accent-red);"><span class="status-dot status-no-active"></span>معطّل</span>'
+            : '<span class="badge-status" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-green);"><span class="status-dot status-active"></span>نشط</span>';
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td><b>${c.name}</b></td>
+            <td style="text-align: right;">${unitTag} <b>${c.name}</b></td>
             <td><span style="background: rgba(56, 189, 248, 0.1); color: var(--accent-blue); padding: 4px 8px; border-radius: 6px; font-weight: bold;">${c.rank}</span></td>
             <td>${c.hours} ساعة</td>
             <td>${c.points} نقطة</td>
             <td><button class="badge-wings" onclick="openWingsModal('${c.discordId}')">${wingsCount} وينق/ات</button></td>
             <td><button class="badge-wings" style="background: rgba(245, 158, 11, 0.2); color: #fde68a;" onclick="openReportsModal('${c.discordId}')">${reportsCount} تقارير</button></td>
+            <td>${statusBadge}</td>
             <td style="text-align: center;">
                 <button class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;" onclick="openEditModal('${c.discordId}')"><i class="fa-solid fa-pen"></i> تعديل</button>
             </td>
@@ -109,6 +122,7 @@ function renderTableRows(tableBodyId, dataList) {
     });
 }
 
+// تحديث الإحصائيات الشاملة
 function updateStats(allPolice) {
     document.getElementById('statTotal').textContent = allPolice.length;
     const totalHours = allPolice.reduce((acc, c) => acc + (parseFloat(c.hours) || 0), 0);
@@ -117,6 +131,7 @@ function updateStats(allPolice) {
     document.getElementById('statPoints').textContent = totalPoints;
 }
 
+// عرض المتواجدين بالموقع
 function renderUsers(users) {
     const tbody = document.getElementById('usersTableBody');
     tbody.innerHTML = '';
@@ -138,6 +153,7 @@ function renderUsers(users) {
     });
 }
 
+// عرض طلبات الموافقة المعلقة
 function renderApprovals(users) {
     const tbody = document.getElementById('approvalTableBody');
     tbody.innerHTML = '';
@@ -157,6 +173,7 @@ function renderApprovals(users) {
     });
 }
 
+// عرض سجل التغييرات
 function renderLogs(logs) {
     const tbody = document.getElementById('logsTableBody');
     tbody.innerHTML = '';
@@ -173,6 +190,7 @@ function renderLogs(logs) {
     });
 }
 
+// إرسال قرار قبول/رفض مستخدم
 async function approveUser(copyId, approve) {
     await fetch('/api/approve-user', {
         method: 'POST',
@@ -181,6 +199,7 @@ async function approveUser(copyId, approve) {
     });
 }
 
+// فتح نافذة التعديل
 function openEditModal(discordId) {
     const cadet = globalAllPolice.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -188,7 +207,9 @@ function openEditModal(discordId) {
     document.getElementById('editDiscordId').value = cadet.discordId;
     document.getElementById('editHours').value = cadet.hours;
     document.getElementById('editPoints').value = cadet.points;
+    document.getElementById('editDisabledStatus').value = cadet.disabled ? "true" : "false";
 
+    // إعادة بناء checkboxes الوينقات
     const wingsContainer = document.getElementById('wingsContainer');
     wingsContainer.innerHTML = '';
 
@@ -202,14 +223,20 @@ function openEditModal(discordId) {
         `;
     });
 
+    // تصفير خانات التقرير عند فتح المودال
+    document.getElementById('editReportTitle').value = '';
+    document.getElementById('editReportContent').value = '';
+
     document.getElementById('editModal').style.display = 'flex';
 }
 
+// إرسال التعديلات للسيرفر عند الاعتماد
 document.getElementById('editForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const discordId = document.getElementById('editDiscordId').value;
     const hours = document.getElementById('editHours').value;
     const points = document.getElementById('editPoints').value;
+    const disabled = document.getElementById('editDisabledStatus').value === "true";
     const reportTitle = document.getElementById('editReportTitle').value;
     const reportContent = document.getElementById('editReportContent').value;
 
@@ -222,6 +249,7 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
             discordId,
             hours,
             points,
+            disabled,
             wings: checkedWings,
             reportTitle,
             reportContent,
@@ -232,6 +260,7 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
     closeModal('editModal');
 });
 
+// فتح مودال عرض الوينقات
 function openWingsModal(discordId) {
     const cadet = globalAllPolice.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -255,6 +284,7 @@ function openWingsModal(discordId) {
     document.getElementById('wingsModal').style.display = 'flex';
 }
 
+// فتح مودال عرض التقارير
 function openReportsModal(discordId) {
     const cadet = globalAllPolice.find(c => c.discordId === discordId);
     if (!cadet) return;
@@ -282,6 +312,7 @@ function closeModal(id) {
     document.getElementById(id).style.display = 'none';
 }
 
+// التبديل بين التبويبات
 function switchView(viewName, btn) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
