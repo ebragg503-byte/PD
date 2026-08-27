@@ -96,19 +96,44 @@ function getFullContent(msg) {
     return parts.length > 0 ? parts.join('\n') : "تقرير بدون نص";
 }
 
-function extractHours(text) {
-    if (!text) return null;
-    const keywordMatch = text.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
-    if (keywordMatch) return parseFloat(keywordMatch[1]);
+// دالة استخراج المعرف والساعات بدقة
+function extractHoursAndUserId(msg) {
+    const fullText = getFullContent(msg);
+    let targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : null;
 
-    const numbers = text.match(/\d+(\.\d+)?/g);
-    if (numbers) {
-        for (let numStr of numbers) {
-            let val = parseFloat(numStr);
-            if (val > 0 && val < 1000 && numStr.length < 6) return val;
+    if (!targetUserId) {
+        const idMatches = fullText.match(/\d{17,19}/g);
+        if (idMatches && idMatches.length > 0) {
+            targetUserId = idMatches[0];
+        } else {
+            targetUserId = msg.author.id;
         }
     }
-    return null;
+
+    let calculatedHours = null;
+
+    const minutesMatch = fullText.match(/Total Minutes\s*:\s*(\d+)/i) || fullText.match(/دقائق\s*:\s*(\d+)/i);
+    if (minutesMatch) {
+        calculatedHours = parseFloat((parseInt(minutesMatch[1], 10) / 60).toFixed(1));
+    } else {
+        const hrsMatch = fullText.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
+        if (hrsMatch) {
+            calculatedHours = parseFloat(hrsMatch[1]);
+        } else {
+            const numbers = fullText.match(/\d+(\.\d+)?/g);
+            if (numbers) {
+                for (let numStr of numbers) {
+                    let val = parseFloat(numStr);
+                    if (val > 0 && val < 1000 && numStr.length < 6 && numStr !== targetUserId) {
+                        calculatedHours = val;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return { targetUserId, hours: calculatedHours };
 }
 
 async function syncJoinDates(guild) {
@@ -146,20 +171,20 @@ async function fetchChannelHistory(channelId, isHours = false) {
         if (!messages) return;
 
         messages.forEach(msg => {
-            if (msg.author.bot) return;
-
-            const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
-            if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
-
             const fullText = getFullContent(msg);
 
             if (isHours) {
-                const hrs = extractHours(fullText);
-                if (hrs !== null) {
-                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hrs);
+                const { targetUserId, hours } = extractHoursAndUserId(msg);
+                if (targetUserId && hours !== null) {
+                    if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
+                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hours);
                 }
             } else {
+                if (msg.author.bot) return;
+                const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
+                if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
                 if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
+
                 const exists = dbData[targetUserId].reports.some(r => r.id === msg.id);
                 if (!exists) {
                     dbData[targetUserId].reports.push({
@@ -203,8 +228,16 @@ async function fetchGuildMembers() {
 
                 const memberWings = getMemberWings(member);
                 const memberRank = getMemberRank(member);
+                const isCadetRole = member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id));
 
-                const joinedTs = dbData[member.id].joinedTimestamp || member.joinedTimestamp || now;
+                // الكاديت والسولو كاديت من ADS، وباقي الرتب من تاريخ الحصول على رتبة LSPD
+                let joinedTs = now;
+                if (isCadetRole) {
+                    joinedTs = dbData[member.id].joinedTimestamp || member.joinedTimestamp || now;
+                } else {
+                    joinedTs = member.joinedTimestamp || dbData[member.id].joinedTimestamp || now;
+                }
+
                 const daysInPolice = Math.floor((now - joinedTs) / (1000 * 60 * 60 * 24));
                 const joinedDateStr = new Date(joinedTs).toLocaleDateString('ar-SA');
 
@@ -214,16 +247,17 @@ async function fetchGuildMembers() {
                     rank: memberRank,
                     hours: dbData[member.id] ? (dbData[member.id].hours || 0) : 0,
                     points: dbData[member.id] ? (dbData[member.id].points || 0) : 0,
-                    wings: memberWings,
-                    wingsCount: memberWings.length,
+                    wings: dbData[member.id].wings || memberWings,
+                    wingsCount: (dbData[member.id].wings || memberWings).length,
                     reports: dbData[member.id] ? (dbData[member.id].reports || []) : [],
+                    disabled: dbData[member.id] ? (dbData[member.id].disabled || false) : false,
                     joinedDate: joinedDateStr,
-                    daysInPolice: daysInPolice
+                    daysInPolice: daysInPolice >= 0 ? daysInPolice : 0
                 };
 
                 allPoliceList.push(cadetData);
 
-                if (member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id))) {
+                if (isCadetRole) {
                     cadetsList.push(cadetData);
                 }
             }
@@ -256,9 +290,8 @@ async function fetchGuildMembers() {
 }
 
 client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-
     if (message.channel.id === MDT_CHANNEL_ID) {
+        if (message.author.bot) return;
         const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
         if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
         if (!dbData[userId].reports) dbData[userId].reports = [];
@@ -280,13 +313,10 @@ client.on('messageCreate', async (message) => {
     }
 
     if (message.channel.id === HOURS_CHANNEL_ID) {
-        const userId = message.mentions.users.first() ? message.mentions.users.first().id : message.author.id;
-        const fullText = getFullContent(message);
-        const hrs = extractHours(fullText);
-
-        if (hrs !== null) {
-            if (!dbData[userId]) dbData[userId] = { hours: 0, points: 0, reports: [] };
-            dbData[userId].hours = Math.max(dbData[userId].hours || 0, hrs);
+        const { targetUserId, hours } = extractHoursAndUserId(message);
+        if (targetUserId && hours !== null) {
+            if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
+            dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hours);
             saveData();
             fetchGuildMembers();
         }
@@ -304,31 +334,45 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-app.post('/api/update-member', (req, res) => {
-    const { discordId, hours, points, newReport } = req.body;
-    if (!discordId) return res.status(400).json({ error: "Missing discordId" });
+function handleUpdateMemberData(data) {
+    const { discordId, hours, points, disabled, wings, newReport, reportTitle, reportContent } = data;
+    if (!discordId) return false;
 
     if (!dbData[discordId]) dbData[discordId] = { hours: 0, points: 0, reports: [] };
 
     if (hours !== undefined) dbData[discordId].hours = parseFloat(hours);
     if (points !== undefined) dbData[discordId].points = parseInt(points);
-    if (newReport) {
+    if (disabled !== undefined) dbData[discordId].disabled = disabled;
+    if (wings !== undefined) dbData[discordId].wings = wings;
+
+    const repTitle = reportTitle || (newReport ? newReport.title : null);
+    const repContent = reportContent || (newReport ? (newReport.details || newReport.text || newReport.content) : null);
+
+    if (repTitle || repContent) {
         if (!dbData[discordId].reports) dbData[discordId].reports = [];
-        const reportContent = newReport.details || newReport.text || newReport.content || "تقرير جديد";
         dbData[discordId].reports.push({
             id: Date.now().toString(),
-            title: newReport.title || "تقرير MDT",
-            details: reportContent,
-            text: reportContent,
-            description: reportContent,
-            content: reportContent,
+            title: repTitle || "تقرير MDT",
+            details: repContent || "تفاصيل التقرير",
+            text: repContent || "تفاصيل التقرير",
+            description: repContent || "تفاصيل التقرير",
+            content: repContent || "تفاصيل التقرير",
             date: new Date().toLocaleDateString('ar-SA')
         });
     }
 
     saveData();
     fetchGuildMembers();
-    res.json({ success: true, data: dbData[discordId] });
+    return true;
+}
+
+app.post('/api/update-member', (req, res) => {
+    const success = handleUpdateMemberData(req.body);
+    if (success) {
+        res.json({ success: true, data: dbData[req.body.discordId] });
+    } else {
+        res.status(400).json({ error: "Missing discordId" });
+    }
 });
 
 app.post('/api/login-request', (req, res) => {
@@ -367,6 +411,10 @@ io.on('connection', (socket) => {
     } else {
         fetchGuildMembers();
     }
+
+    socket.on('updateOfficer', (data) => {
+        handleUpdateMemberData(data);
+    });
 
     socket.on('approve-user', (copyId) => {
         const targetUser = activeUsers.find(u => u.copyId === copyId);
