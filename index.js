@@ -96,13 +96,38 @@ function getFullContent(msg) {
     return parts.length > 0 ? parts.join('\n') : "تقرير بدون نص";
 }
 
-// دالة استخراج المعرف والساعات بدقة
+// دالة متطورة لاستخراج المعرف والساعات من رسائل البوت والـ Embeds
 function extractHoursAndUserId(msg) {
-    const fullText = getFullContent(msg);
-    let targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : null;
+    let targetUserId = null;
+    let calculatedHours = null;
 
+    // 1. فحص الإشارات المباشرة
+    if (msg.mentions && msg.mentions.users && msg.mentions.users.size > 0) {
+        targetUserId = msg.mentions.users.first().id;
+    }
+
+    let fullText = msg.content || "";
+
+    // 2. فحص الـ Embeds واستخراج المعرف والنصوص
+    if (msg.embeds && msg.embeds.length > 0) {
+        msg.embeds.forEach(emb => {
+            if (emb.title) fullText += " " + emb.title;
+            if (emb.description) fullText += " " + emb.description;
+            if (emb.fields) {
+                emb.fields.forEach(f => {
+                    fullText += ` ${f.name} ${f.value}`;
+                    const mentionMatch = f.value.match(/<@!?(\d{17,19})>/);
+                    if (mentionMatch && !targetUserId) {
+                        targetUserId = mentionMatch[1];
+                    }
+                });
+            }
+        });
+    }
+
+    // إذا لم ينتهي البحث إلى معرف، يتم البحث عن تسلسل أرقام الآيدي (17-19 رقم)
     if (!targetUserId) {
-        const idMatches = fullText.match(/\d{17,19}/g);
+        const idMatches = fullText.match(/\b\d{17,19}\b/g);
         if (idMatches && idMatches.length > 0) {
             targetUserId = idMatches[0];
         } else {
@@ -110,26 +135,18 @@ function extractHoursAndUserId(msg) {
         }
     }
 
-    let calculatedHours = null;
+    // 3. استخراج الدقائق أو الساعات من النص
+    const minutesMatch = fullText.match(/Total\s*Minutes\s*:?\s*(\d+)/i) || fullText.match(/دقائق\s*:?\s*(\d+)/i);
+    const dutyTimeMatch = fullText.match(/Total\s*Duty\s*Time\s*:?\s*(\d+)h/i);
 
-    const minutesMatch = fullText.match(/Total Minutes\s*:\s*(\d+)/i) || fullText.match(/دقائق\s*:\s*(\d+)/i);
     if (minutesMatch) {
         calculatedHours = parseFloat((parseInt(minutesMatch[1], 10) / 60).toFixed(1));
+    } else if (dutyTimeMatch) {
+        calculatedHours = parseFloat(dutyTimeMatch[1]);
     } else {
         const hrsMatch = fullText.match(/(\d+(\.\d+)?)\s*(ساعة|ساعات|ساعه|hours|hrs|hour)/i);
         if (hrsMatch) {
             calculatedHours = parseFloat(hrsMatch[1]);
-        } else {
-            const numbers = fullText.match(/\d+(\.\d+)?/g);
-            if (numbers) {
-                for (let numStr of numbers) {
-                    let val = parseFloat(numStr);
-                    if (val > 0 && val < 1000 && numStr.length < 6 && numStr !== targetUserId) {
-                        calculatedHours = val;
-                        break;
-                    }
-                }
-            }
         }
     }
 
@@ -141,25 +158,33 @@ async function syncJoinDates(guild) {
         const channel = await guild.channels.fetch(ADS_CHANNEL_ID).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-        if (!messages) return;
+        let lastId;
+        while (true) {
+            const options = { limit: 100 };
+            if (lastId) options.before = lastId;
 
-        const sortedMsgs = Array.from(messages.values()).reverse();
+            const messages = await channel.messages.fetch(options).catch(() => null);
+            if (!messages || messages.size === 0) break;
 
-        sortedMsgs.forEach(msg => {
-            msg.mentions.users.forEach(user => {
-                if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
-                if (!dbData[user.id].joinedTimestamp) {
-                    dbData[user.id].joinedTimestamp = msg.createdTimestamp;
-                }
+            messages.forEach(msg => {
+                msg.mentions.users.forEach(user => {
+                    if (!dbData[user.id]) dbData[user.id] = { hours: 0, points: 0, reports: [] };
+                    if (!dbData[user.id].joinedTimestamp || msg.createdTimestamp < dbData[user.id].joinedTimestamp) {
+                        dbData[user.id].joinedTimestamp = msg.createdTimestamp;
+                    }
+                });
             });
-        });
+
+            lastId = messages.last().id;
+            if (messages.size < 100) break;
+        }
         saveData();
     } catch (err) {
         console.error("خطأ في جلب تواريخ الدخول من روم ADS:", err);
     }
 }
 
+// دالة جلب الأرشيف الكامل لقراءة الساعات والتقارير بدون الاعتماد على 100 رسالة فقط
 async function fetchChannelHistory(channelId, isHours = false) {
     try {
         const guild = client.guilds.cache.get(GUILD_ID);
@@ -167,38 +192,52 @@ async function fetchChannelHistory(channelId, isHours = false) {
         const channel = await guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-        if (!messages) return;
+        let lastId;
+        let fetchedCount = 0;
+        const maxMessages = 500; // قراءة آخر 500 رسالة لضمان استيعاب كافة التسجيلات
 
-        messages.forEach(msg => {
-            const fullText = getFullContent(msg);
+        while (fetchedCount < maxMessages) {
+            const options = { limit: 100 };
+            if (lastId) options.before = lastId;
 
-            if (isHours) {
-                const { targetUserId, hours } = extractHoursAndUserId(msg);
-                if (targetUserId && hours !== null) {
+            const messages = await channel.messages.fetch(options).catch(() => null);
+            if (!messages || messages.size === 0) break;
+
+            messages.forEach(msg => {
+                const fullText = getFullContent(msg);
+
+                if (isHours) {
+                    const { targetUserId, hours } = extractHoursAndUserId(msg);
+                    if (targetUserId && hours !== null) {
+                        if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
+                        dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hours);
+                    }
+                } else {
+                    if (msg.author.bot) return;
+                    const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
                     if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
-                    dbData[targetUserId].hours = Math.max(dbData[targetUserId].hours || 0, hours);
-                }
-            } else {
-                if (msg.author.bot) return;
-                const targetUserId = msg.mentions.users.first() ? msg.mentions.users.first().id : msg.author.id;
-                if (!dbData[targetUserId]) dbData[targetUserId] = { hours: 0, points: 0, reports: [] };
-                if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
+                    if (!dbData[targetUserId].reports) dbData[targetUserId].reports = [];
 
-                const exists = dbData[targetUserId].reports.some(r => r.id === msg.id);
-                if (!exists) {
-                    dbData[targetUserId].reports.push({
-                        id: msg.id,
-                        title: `تقرير MDT`,
-                        details: fullText,
-                        text: fullText,
-                        description: fullText,
-                        content: fullText,
-                        date: new Date(msg.createdTimestamp).toLocaleDateString('ar-SA')
-                    });
+                    const exists = dbData[targetUserId].reports.some(r => r.id === msg.id);
+                    if (!exists) {
+                        dbData[targetUserId].reports.push({
+                            id: msg.id,
+                            title: `تقرير MDT`,
+                            details: fullText,
+                            text: fullText,
+                            description: fullText,
+                            content: fullText,
+                            date: new Date(msg.createdTimestamp).toLocaleDateString('ar-SA')
+                        });
+                    }
                 }
-            }
-        });
+            });
+
+            fetchedCount += messages.size;
+            lastId = messages.last().id;
+            if (messages.size < 100) break;
+        }
+
         saveData();
     } catch (e) {
         console.error("خطأ قراءة الأرشيف:", e);
@@ -230,7 +269,6 @@ async function fetchGuildMembers() {
                 const memberRank = getMemberRank(member);
                 const isCadetRole = member.roles.cache.some(role => CADET_ROLE_IDS.includes(role.id));
 
-                // الكاديت والسولو كاديت من ADS، وباقي الرتب من تاريخ الحصول على رتبة LSPD
                 let joinedTs = now;
                 if (isCadetRole) {
                     joinedTs = dbData[member.id].joinedTimestamp || member.joinedTimestamp || now;
