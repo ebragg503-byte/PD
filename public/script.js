@@ -4,7 +4,7 @@ let currentAllPolice = [];
 let currentCadets = [];
 let currentUser = { username: '', copyId: '' };
 
-// 1. إدارة تسجيل الدخول
+// 1. إدارة تسجيل الدخول والتحقق من الجلسة
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('loginUsername').value.trim();
@@ -32,27 +32,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     }
 });
 
-// 2. استقبال بيانات الشرطة المحدثة عبر Socket.io (أو التحديث التلقائي)
-socket.on('updateData', (data) => {
-    if (!data || !data.police) return;
-
-    const allMembers = Object.keys(data.police).map(id => ({
-        discordId: id,
-        ...data.police[id]
-    }));
-
-    currentAllPolice = allMembers;
-    // تصفية الرتب المخصصة للأكاديت والـ Solo Cadet
-    currentCadets = allMembers.filter(m => 
-        m.rank && (m.rank.toLowerCase().includes('cadet') || m.rank.toLowerCase().includes('كاديت'))
-    );
-
-    renderTable('allPoliceTableBody', currentAllPolice);
-    renderTable('cadetsOnlyTableBody', currentCadets);
-    updateStats(currentAllPolice);
-});
-
-// دعم الحدث القديم للشرطة في حال استخدامه
+// 2. استقبال بيانات الشرطة والستخدمين المحدثة عبر Socket.io
 socket.on('policeDataUpdate', (data) => {
     currentAllPolice = data.allPolice || [];
     currentCadets = data.cadets || [];
@@ -62,20 +42,42 @@ socket.on('policeDataUpdate', (data) => {
     updateStats(currentAllPolice);
 });
 
+socket.on('updateData', (data) => {
+    if (!data || !data.police) return;
+
+    const allMembers = Object.keys(data.police).map(id => ({
+        discordId: id,
+        ...data.police[id]
+    }));
+
+    currentAllPolice = allMembers;
+    currentCadets = allMembers.filter(m => 
+        m.rank && (m.rank.toLowerCase().includes('cadet') || m.rank.toLowerCase().includes('كاديت'))
+    );
+
+    renderTable('allPoliceTableBody', currentAllPolice);
+    renderTable('cadetsOnlyTableBody', currentCadets);
+    updateStats(currentAllPolice);
+});
+
+socket.on('usersUpdate', (users) => {
+    renderUsersTable(users);
+    renderApprovalList(users);
+});
+
 // 3. بناء الجدول وعرض البيانات والتاريخ والحالة
 function renderTable(tableBodyId, list) {
     const tbody = document.getElementById(tableBodyId);
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     list.forEach(item => {
         const tr = document.createElement('tr');
         
-        // عرض تاريخ التعيين وعدد الأيام المحسوبة من السيرفر
-        const hireDateDisplay = item.hireDate || item.joinedDate || "غير محدد";
-        const daysCount = item.daysPassed !== undefined ? item.daysPassed : (item.daysInPolice || 0);
+        const hireDateDisplay = item.joinedDate || item.hireDate || "غير محدد";
+        const daysCount = item.daysInPolice !== undefined ? item.daysInPolice : (item.daysPassed || 0);
         const joinedDateText = `${hireDateDisplay} <span style="font-size:11px; color:var(--text-secondary);">(${daysCount} يوم)</span>`;
 
-        // حالة العسكري (نشط / معطل)
         const statusBadge = item.disabled 
             ? `<span class="badge-status" style="color:var(--accent-red);"><span class="status-dot status-no-active"></span> معطّل</span>`
             : `<span class="badge-status" style="color:var(--accent-green);"><span class="status-dot status-active"></span> نشط</span>`;
@@ -87,7 +89,7 @@ function renderTable(tableBodyId, list) {
             <td>${item.hours || 0} ساعة</td>
             <td>${item.points || 0} نقطة</td>
             <td>
-                <span class="badge-wings" onclick="showWings('${item.discordId}')">
+                <span class="badge-wings" style="cursor:pointer;" onclick="showWings('${item.discordId}')">
                     <i class="fa-solid fa-award"></i> ${item.wings ? item.wings.length : 0} وينقات
                 </span>
             </td>
@@ -109,13 +111,17 @@ function renderTable(tableBodyId, list) {
 
 // 4. تحديث الإحصائيات العلويّة
 function updateStats(policeList) {
-    document.getElementById('statTotal').innerText = policeList.length;
+    const statTotal = document.getElementById('statTotal');
+    const statHours = document.getElementById('statHours');
+    const statPoints = document.getElementById('statPoints');
+
+    if (statTotal) statTotal.innerText = policeList.length;
     
     let totalHours = policeList.reduce((acc, curr) => acc + (parseFloat(curr.hours) || 0), 0);
     let totalPoints = policeList.reduce((acc, curr) => acc + (parseInt(curr.points) || 0), 0);
 
-    document.getElementById('statHours').innerText = totalHours.toFixed(1);
-    document.getElementById('statPoints').innerText = totalPoints;
+    if (statHours) statHours.innerText = totalHours.toFixed(1);
+    if (statPoints) statPoints.innerText = totalPoints;
 }
 
 // 5. فتح نافذة التعديل وتعبئة البيانات بالكامل
@@ -131,7 +137,6 @@ function openEditModal(discordId) {
     document.getElementById('editReportTitle').value = '';
     document.getElementById('editReportContent').value = '';
 
-    // تحديد خيارات الوينقات المحددة سابقاً
     const memberWings = member.wings || [];
     const checkboxes = document.querySelectorAll('#wingsContainer input[type="checkbox"]');
     checkboxes.forEach(cb => {
@@ -141,8 +146,8 @@ function openEditModal(discordId) {
     document.getElementById('editModal').style.display = 'flex';
 }
 
-// 6. حفظ التعديل وإرساله عبر Socket.io والسيرفر
-document.getElementById('editForm').addEventListener('submit', (e) => {
+// 6. حفظ التعديل وإرساله عبر API و Socket.io
+document.getElementById('editForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const discordId = document.getElementById('editDiscordId').value;
@@ -150,7 +155,6 @@ document.getElementById('editForm').addEventListener('submit', (e) => {
     const points = parseInt(document.getElementById('editPoints').value);
     const disabled = document.getElementById('editDisabledStatus').value === "true";
     
-    // جمع الوينقات المحددة
     const selectedWings = [];
     document.querySelectorAll('#wingsContainer input[type="checkbox"]:checked').forEach(cb => {
         selectedWings.push(cb.value);
@@ -170,19 +174,30 @@ document.getElementById('editForm').addEventListener('submit', (e) => {
         updatedBy: currentUser.username || "المشرف"
     };
 
-    // إرسال عبر Socket.io للتزامن اللحظي
+    // الإرسال للسيرفر عبر API مع بث عبر Socket
+    try {
+        await fetch('/api/update-member', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    } catch (err) {
+        console.error("خطأ في تحديث البيانات:", err);
+    }
+
     socket.emit('updateOfficer', payload);
     closeModal('editModal');
 });
 
 // 7. إغلاق النوافذ وإدارة التبويبات
 function closeModal(modalId) {
-    document.getElementById(modalId).style.display = 'none';
+    const modal = document.getElementById(modalId);
+    if (modal) modal.style.display = 'none';
 }
 
 function switchView(viewName, btn) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    if (btn) btn.classList.add('active');
 
     const views = ['viewAllPolice', 'viewCadetsOnly', 'viewUsers', 'viewApproval', 'viewLogs'];
     views.forEach(v => {
@@ -190,14 +205,11 @@ function switchView(viewName, btn) {
         if (el) el.style.display = 'none';
     });
 
-    if (viewName === 'allPolice') document.getElementById('viewAllPolice').style.display = 'block';
-    if (viewName === 'cadetsOnly') document.getElementById('viewCadetsOnly').style.display = 'block';
-    if (viewName === 'users') document.getElementById('viewUsers').style.display = 'block';
-    if (viewName === 'approval') document.getElementById('viewApproval').style.display = 'block';
-    if (viewName === 'logs') document.getElementById('viewLogs').style.display = 'block';
+    const targetView = document.getElementById(`view${viewName.charAt(0).toUpperCase() + viewName.slice(1)}`);
+    if (targetView) targetView.style.display = 'block';
 }
 
-// 8. عرض الوينقات والتقارير
+// 8. عرض الوينقات والتقارير وحذف التقارير
 function showWings(discordId) {
     const member = currentAllPolice.find(m => m.discordId === discordId);
     if (!member) return;
@@ -227,15 +239,16 @@ function showReports(discordId) {
     container.innerHTML = '';
 
     if (member.reports && member.reports.length > 0) {
-        member.reports.forEach((rep) => {
+        member.reports.forEach((rep, index) => {
             const div = document.createElement('div');
-            div.style.cssText = 'background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border:1px solid var(--card-border);';
+            div.style.cssText = 'background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; border:1px solid var(--card-border); position:relative;';
             const text = rep.content || rep.details || rep.text || "بدون نص";
             
             div.innerHTML = `
                 <div style="font-weight:bold; color:var(--accent-blue); font-size:13px;">${rep.title || 'تقرير MDT'}</div>
                 <div style="font-size:12px; margin-top:4px; white-space:pre-line;">${text}</div>
                 <div style="font-size:10px; color:var(--text-secondary); margin-top:5px;">التاريخ: ${rep.date || 'غير محدد'}</div>
+                <button onclick="deleteReport('${discordId}', '${rep.id}', ${index})" style="position:absolute; left:10px; top:10px; background:var(--accent-red); color:#fff; border:none; border-radius:4px; padding:2px 6px; font-size:10px; cursor:pointer;">حذف</button>
             `;
             container.appendChild(div);
         });
@@ -244,4 +257,65 @@ function showReports(discordId) {
     }
 
     document.getElementById('reportsModal').style.display = 'flex';
+}
+
+function deleteReport(discordId, reportId, reportIndex) {
+    if (confirm('هل أنت تأكد من حذف هذا التقرير؟')) {
+        socket.emit('delete-report', { discordId, reportId, reportIndex });
+        closeModal('reportsModal');
+    }
+}
+
+// 9. إدارة المستخدمين والموافقات
+function renderUsersTable(users) {
+    const tbody = document.getElementById('usersTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    users.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${u.username}</td>
+            <td>${u.copyId}</td>
+            <td>${u.approved ? '<span style="color:var(--accent-green);">مقبول</span>' : '<span style="color:var(--accent-amber);">معلق</span>'}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderApprovalList(users) {
+    const container = document.getElementById('approvalList');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const pending = users.filter(u => !u.approved);
+
+    if (pending.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-secondary);">لا توجد طلبات معلقة حالياً.</p>';
+        return;
+    }
+
+    pending.forEach(u => {
+        const div = document.createElement('div');
+        div.style.cssText = 'background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;';
+        div.innerHTML = `
+            <div>
+                <strong>${u.username}</strong>
+                <span style="font-size:12px; color:var(--text-secondary); font-family:monospace;"> (${u.copyId})</span>
+            </div>
+            <div>
+                <button class="btn btn-success" style="padding:4px 8px; font-size:12px; margin-left:5px;" onclick="approveUser('${u.copyId}')">قبول</button>
+                <button class="btn btn-danger" style="padding:4px 8px; font-size:12px;" onclick="rejectUser('${u.copyId}')">رفض</button>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function approveUser(copyId) {
+    socket.emit('approve-user', copyId);
+}
+
+function rejectUser(copyId) {
+    socket.emit('reject-user', copyId);
 }
