@@ -122,8 +122,10 @@ const CONFIG = {
         { level: 16, en: 'Cadet', ar: 'كاديت', kw: ['cadet', 'كاديت', 'متدرب'] }
     ],
 
-    // أي شخص مسجّل بالموقع يقدر يعدّل؟ (المشرف دائماً)
-    defaultCanEdit: process.env.DEFAULT_CAN_EDIT !== 'false',
+    // مين يعدّل بالموقع؟ الافتراضي: أنت فقط (المشرفين)
+    // تقدر تختار روم معيّن من الموقع — أي أحد عنده الروم يقدر يعدّل
+    editorRoleIds: (process.env.EDITOR_ROLE_IDS || '')
+        .split(',').map(s => s.trim()).filter(Boolean),
 
     // هل لازم يكون عنده رتبة LSPD عشان يسجّل؟
     requireMemberRole: process.env.REQUIRE_MEMBER_ROLE === 'true',
@@ -175,6 +177,7 @@ function emptyDb() {
         logs: [],
         rankConfig: [],
         roleConfig: [],
+        settings: { editorRoles: [] },
         meta: { auditSweptAt: 0, reportsSweptAt: 0 }
     };
 }
@@ -198,6 +201,8 @@ function loadDb() {
     if (!fresh.officers || typeof fresh.officers !== 'object') fresh.officers = {};
     if (!fresh.accounts || typeof fresh.accounts !== 'object') fresh.accounts = {};
     if (!Array.isArray(fresh.logs)) fresh.logs = [];
+    if (!fresh.settings || typeof fresh.settings !== 'object') fresh.settings = { editorRoles: [] };
+    if (!Array.isArray(fresh.settings.editorRoles)) fresh.settings.editorRoles = [];
     if (!Array.isArray(fresh.rankConfig)) fresh.rankConfig = [];
     if (!Array.isArray(fresh.roleConfig)) {
         // ترحيل: نحوّل الرتب القديمة إلى النظام الموحّد
@@ -424,15 +429,24 @@ function rankDefForRoleName(roleName) {
     return null;
 }
 
-/** تصنيف الروم: rank (رتبة) / cert (شهادة) / duty (مسؤولية) / hide (ما نبيه) */
+/** روم تقنية/بوتات ما نبيها تظهر.
+ *  ملاحظة: ما نخفي "Member" ولا "رئيس..." — هذي مسؤوليات، المشرف يفعّلها بنفسه. */
+const JUNK_ROLE_RES = [
+    /\bbots?\b/i, /pro\s*bot/i, /server\s*booster/i, /valorant/i, /sapph?ire/i,
+    /^security$/i, /luna\s*bot/i, /^vacations?$/i, /^wicks?$/i, /^all\s*wings?$/i,
+    /^\s*et\b/i, /^staff$/i, /^server$/i, /^clan$/i, /^family$/i
+];
+
 function classifyRole(role) {
     if (role.managed) return 'hide';
     if (role.id === role.guild?.id) return 'hide';
     if (role.name === '@everyone') return 'hide';
     if (CONFIG.certifications[role.id]) return 'cert';
-    if (CONFIG.memberRoles.includes(role.id)) return 'hide';   // LSPD —embership
+    if (CONFIG.memberRoles.includes(role.id)) return 'hide';   // LSPD — عضوية
     if (CONFIG.cadetRoles.includes(role.id)) return 'hide';
     if (rankDefForRoleName(role.name)) return 'rank';
+    const clean = cleanRoleName(role.name) || role.name;
+    if (JUNK_ROLE_RES.some(re => re.test(clean))) return 'hide';
     // مسؤوليات: أي روم ثاني فيه أعضاء
     const count = role.members?.size ?? 0;
     if (count > 0) return 'duty';
@@ -480,7 +494,8 @@ function syncRoleConfig(guild) {
             type: d.type,
             name: (s && s.name) || d.name,
             order: s && Number.isFinite(s.order) ? s.order : counters[d.type],
-            enabled: s ? s.enabled !== false : true,
+            // المسؤوليات الجديدة تبدأ مخفية — المشرف يفعّل اللي يبيه
+            enabled: s ? s.enabled !== false : (d.type !== 'duty'),
             position: d.position
         });
     }
@@ -539,8 +554,12 @@ function memberRankInfo(member) {
         }
     }
     if (best) return best;
+    // احتياط: ما لقى رتبة معروفة — نعطيه ترتيب عشوائي فريد بعد كل الرتب
+    // (ما نبيه ياخذ التاج، وما نبيه يطلع قبل أحد)
     const def = rankDefForRoleName(member.roles.cache.map(r => r.name).join(' '));
-    if (def) return { roleId: null, name: def.en, order: def.level, index: def.level };
+    if (def) {
+        return { roleId: null, name: def.en, order: 900 + (def.level || 0), index: 900 + (def.level || 0), guessed: true };
+    }
     return null;
 }
 
@@ -707,7 +726,11 @@ function parseTemplate(msg) {
     const push = (label, value) => {
         const k = key(label);
         if (!k) return;
-        const v = String(value ?? '').replace(/<@!?(\d{17,19})>/g, '@$1').trim();
+        // منشن شخص <@id>  •  منشن رتبة <@&id>  •  منشن روم <@&id>
+        const v = String(value ?? '')
+            .replace(/<@!?(\d{17,19})>/g, '@$1')
+            .replace(/<@&(\w+)>/g, '&$1')     // منشن رتبة
+            .trim();
         const hit = fields.find(x => x.key === k);
         if (hit) hit.value = (hit.value ? hit.value + '\n' : '') + v;
         else fields.push({ key: k, label: String(label).trim(), value: v });
@@ -745,6 +768,14 @@ function parseTemplate(msg) {
         },
         raw: fullMessage(msg)
     };
+}
+
+/** ينظّف قيمة "أمرها" — منشن أو اسم مكتوب */
+function cleanIssuer(rawVal, idVal) {
+    if (idVal) return `${cachedName(idVal)} (${idVal})`;
+    const t = String(rawVal || '').replace(/\s*\|\s*/g, ' ').replace(/[*_`~>]/g, '').trim();
+    if (!t) return 'الديسكورد';
+    return t.replace(/^@/, '').trim() || 'الديسكورد';
 }
 
 /** يلقى الفرد بالمنشن أو بالاسم (لو ما فيه منشن) */
@@ -851,7 +882,7 @@ function handleStrikeMessage(msg) {
 
     const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '(ما ذكر سبب)';
     const byId = t.firstId(/commend|coommend|by|issued|signed|amir|بامر/);
-    const by = byId ? `${cachedName(byId)} (${byId})` : (t.byKey(/commend|coommend|by|issued/) || 'الديسكورد');
+    const by = cleanIssuer(t.byKey(/commend|coommend|by|issued|signed|amir|بامر/), byId);
 
     const res = applyPoints(targetId, -amount, {
         type: 'strike',
@@ -886,7 +917,7 @@ function handlePointsMessage(msg) {
 
     const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '';
     const byId = t.firstId(/commend|coommend|by|issued|signed|amir|بامر/);
-    const by = byId ? `${cachedName(byId)} (${byId})` : (t.byKey(/commend|coommend|by|issued/) || 'الديسكورد');
+    const by = cleanIssuer(t.byKey(/commend|coommend|by|issued|signed|amir|بامر/), byId);
 
     const res = applyPoints(targetId, amount, {
         type: 'points',
@@ -911,18 +942,42 @@ function handlePromotionMessage(msg) {
     if (!Array.isArray(st.promotions)) st.promotions = [];
     if (st.promotions.some(p => p.msgId === msg.id)) return;   // مطبّق مسبقاً
 
-    // نلتقط من/إلى حتى لو الحقل فاضي — نحاول من النص الكامل
+    // نلتقط من/إلى — يقبل منشن رتبة <@&id> أو نص عادي
     const clean = (s) => String(s || '').replace(/\s*\|\s*/g, ' ').replace(/[*_`~>]/g, '').trim();
-    let fromRank = clean(t.byKey(/^from$|oldrank|old|prev|previous|fromrank|من/) || t.byKey(/^from/));
-    let toRank = clean(t.byKey(/^to$|newrank|new|next|promoteto|الي|الى|إلى/) || t.byKey(/^to/));
+
+    const rankOf = (val) => {
+        const v = String(val || '').trim();
+        if (!v) return '';
+        // منشن رتبة: <@&id> أو &id — نحوّله لاسم الرتبة الحقيقي
+        const rm = v.match(/<@&(\w+)>|^&(\w+)$/);
+        if (rm) {
+            const rid = rm[1] || rm[2];
+            const role = guildRef?.roles.cache.get(rid);
+            const cfg = (db.roleConfig || []).find(r => r.id === rid);
+            return cfg?.name || (role ? (cleanRoleName(role.name) || role.name) : '');
+        }
+        // منشن شخص عادي كرتبة؟ نتجاهل
+        if (/^@(\d{17,19})$/.test(v)) return '';
+        return v.replace(/^@/, '').trim();
+    };
+
+    let fromRaw = t.byKey(/^from$|oldrank|old|prev|previous|fromrank|من/) || t.byKey(/^from/);
+    let toRaw = t.byKey(/^to$|newrank|new|next|promoteto|الي|الى|إلى/) || t.byKey(/^to/);
+    let fromRank = rankOf(fromRaw);
+    let toRank = rankOf(toRaw);
+
     if (!fromRank || !toRank) {
         const m = t.raw.match(/(?:^|\n)\s*from\s*:?\s*([^\n]+)[\s\S]*?\n?\s*to\s*:?\s*([^\n]+)/i);
-        if (m) { fromRank = fromRank || clean(m[1]); toRank = toRank || clean(m[2]); }
+        if (m) { fromRank = fromRank || rankOf(m[1]); toRank = toRank || rankOf(m[2]); }
     }
 
     const reason = clean(t.byKey(/reason|desc|description|سبب|وصف/));
+    // "أمرها" أحياناً اسم مكتوب مو منشن — ننظفه بدل ما نتجاهله
+    const byRaw = t.byKey(/commend|coommend|by|issued|signed|amir|بامر/);
     const byId = t.firstId(/commend|coommend|by|issued|signed|amir|بامر/);
-    const by = byId ? `${cachedName(byId)} (${byId})` : (t.byKey(/commend|coommend|by|issued/) || 'الديسكورد');
+    const by = byId
+        ? `${cachedName(byId)} (${byId})`
+        : (clean(byRaw).replace(/^@/, '').trim() || 'الديسكورد');
 
     st.promotions.unshift({
         msgId: msg.id,
@@ -1259,6 +1314,9 @@ function buildOfficerRecord(member, now) {
     const status = st.disabled ? 'suspended' : (st.onLeave ? 'leave' : 'active');
     const rankName = st.customRank || (rankInfo ? rankInfo.name : '—');
 
+    // نحفظ قائمة الروم اللي عنده — منها نعرف لو يقدر يعدّل الموقع
+    st.heldRoleIds = [...member.roles.cache.keys()].filter(id => id !== '0');
+
     return {
         id: member.id,
         name: member.displayName || member.user.username,
@@ -1273,6 +1331,7 @@ function buildOfficerRecord(member, now) {
         rank: rankName,
         rankRoleId: rankInfo?.roleId || null,
         rankLevel: rankInfo ? rankInfo.order : 9999,
+        rankIsGuess: !!rankInfo?.guessed,
         rankRoleName: rankSource ? rankSource.roleName : (rankInfo ? rankInfo.name : null),
         rankGrantedAt: rankSource ? rankSource.at : null,
         rankGrantedBy: rankSource ? rankSource.byName : null,
@@ -1352,8 +1411,31 @@ async function refreshRegistry(force = false) {
  * 6) الحسابات والتوثيق
  * ==========================================================================*/
 
+/** الروم اللي.filterّعطي صلاحية التعديل + الاستثناءات اليدوية */
+function editorRoleIds() {
+    const saved = (db.settings && Array.isArray(db.settings.editorRoles)) ? db.settings.editorRoles : [];
+    return [...new Set([...CONFIG.editorRoleIds, ...saved.map(String)])].filter(Boolean);
+}
+/** هل هذا الحساب يعدّل؟ (المشرف دائماً + أي أحد عنده روم معدّل + استثناء يدوي) */
+function canEditAccount(a) {
+    if (!a) return false;
+    if (CONFIG.adminIds.includes(a.copyId)) return true;
+    if (a.canEdit === true) return true;                    // منح يدوي من الإدارة
+    if (a.canEdit === false) return false;                  // منع يدوي
+    const roles = editorRoleIds();
+    if (!roles.length) return false;                        // ما في روم معدّل = ما أحد يعدّل
+    const st = officerStore(a.copyId);
+    const have = roles.filter(r => (st.heldRoleIds || []).includes(r));
+    if (have.length) {
+        st.editorViaRoles = have;                           // نخزّنها عشان نعرف ليش
+        return true;
+    }
+    return false;
+}
+
 function publicAccount(a) {
     if (!a) return null;
+    const canEdit = canEditAccount(a);
     return {
         id: a.id,
         username: a.username,
@@ -1365,7 +1447,9 @@ function publicAccount(a) {
         verified: a.verified,
         verifyNote: a.verifyNote,
         isAdmin: CONFIG.adminIds.includes(a.copyId),
-        canEdit: CONFIG.adminIds.includes(a.copyId) || a.canEdit !== false,
+        canEdit,
+        editVia: CONFIG.adminIds.includes(a.copyId) ? 'admin'
+            : (a.canEdit === true ? 'granted' : (a.canEdit === false ? 'denied' : (st_roles(a) ? 'role' : null))),
         firstLoginAt: a.firstLoginAt,
         lastLoginAt: a.lastLoginAt,
         loginCount: a.loginCount || 0,
@@ -1375,6 +1459,14 @@ function publicAccount(a) {
         blockReason: a.blockReason || null,
         resetCount: a.resetCount || 0
     };
+}
+/** اختصار: يحقّق إن الفرد عنده روم المعدّل (يرجّع مصفوفة أو null) */
+function st_roles(a) {
+    const st = officerStore(a.copyId);
+    const roles = editorRoleIds();
+    if (!roles.length) return null;
+    const have = roles.filter(r => (st.heldRoleIds || []).includes(r));
+    return have.length ? have : null;
 }
 
 function findAccountByToken(token) {
@@ -1415,10 +1507,11 @@ function requireAdmin(req, res, next) {
     next();
 }
 function requireEdit(req, res, next) {
-    const a = req.account;
-    const isAdmin = CONFIG.adminIds.includes(a.copyId);
-    if (!isAdmin && a.canEdit === false) {
-        return res.status(403).json({ error: 'forbidden', message: 'لا تملك صلاحية تعديل البيانات' });
+    if (!canEditAccount(req.account)) {
+        return res.status(403).json({
+            error: 'forbidden',
+            message: 'ما عندك صلاحية التعديل — راجع المشرف (عندك حق تقرأ بس)'
+        });
     }
     next();
 }
@@ -1520,6 +1613,48 @@ function rateOk(key, max = 8, windowMs = 10 * 60 * 1000) {
     rec.count++;
     return rec.count <= max;
 }
+
+/* --- صلاحيات التعديل --- */
+
+/** إعدادات الموقع — أي روم يعطي صلاحية التعديل */
+app.get('/api/settings', requireAuth, (req, res) => {
+    res.json({
+        ok: true,
+        editorRoleIds: editorRoleIds(),
+        isAdmin: CONFIG.adminIds.includes(req.account.copyId),
+        canEdit: canEditAccount(req.account)
+    });
+});
+
+/** يختار المشرف الروم اللي تعطي صلاحية التعديل */
+app.post('/api/settings/editor-roles', requireAuth, requireAdmin, (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    const valid = new Set([...(guildRef?.roles.cache.keys() || [])].map(String));
+    db.settings = db.settings || {};
+    db.settings.editorRoles = ids.filter(id => valid.has(id) && id !== '0');
+    saveDb();
+    addLog('تغيير رومModifiers', {
+        by: req.account.charName || req.account.username, byCopyId: req.account.copyId,
+        target: `${db.settings.editorRoles.length} روم`,
+        details: db.settings.editorRoles.map(id => guildRef?.roles.cache.get(id)?.name || id).join('، ')
+    });
+    broadcastPresence();
+    res.json({ ok: true, editorRoleIds: db.settings.editorRoles });
+});
+
+/** يعطي/يسحب صلاحية التعديل لحساب واحد يدوياً */
+app.post('/api/accounts/:id/can-edit', requireAuth, requireAdmin, (req, res) => {
+    const a = db.accounts[req.params.id];
+    if (!a) return res.status(404).json({ error: 'not-found' });
+    const v = req.body?.canEdit;
+    if (v === true) a.canEdit = true;
+    else if (v === false) a.canEdit = false;
+    else a.canEdit = null;                 // يعودDecision للروم
+    saveDb();
+    addLog('تعديل صلاحية', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: `${a.charName} (${a.copyId})`, details: a.canEdit === null ? 'حسب الروم' : (a.canEdit ? 'ممنوح' : 'ممنوع') });
+    io.emit('accounts:update', accountsPublicList());
+    res.json({ ok: true, account: publicAccount(a) });
+});
 
 /* --- إدارة الأدوار (رتب + شهادات + مسؤوليات) --- */
 

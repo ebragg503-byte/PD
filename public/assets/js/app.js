@@ -453,7 +453,7 @@ function certChips(list, limit = 6) {
     const rest = certs.length - limit;
     return `<div class="certs">${show}${rest > 0 ? `<span class="cert" title="${rest} قسم آخر">+${rest}</span>` : ''}</div>`;
 }
-/** خلية النقاط — مع مؤشّر الخصم数和 عدد الـ Strikes */
+/** خلية النقاط — مع مؤشّر الخصم وعدد الاسترايك */
 function pointsCell(o) {
     const lc = o.lastPointsChange;
     let badge = '';
@@ -506,6 +506,19 @@ function rankSelect(o) {
 function topCrown(o) {
     if (S.topLevel === null || o.rankLevel !== S.topLevel || o.rank === '—') return '';
     return `<span class="crown" title="أعلى رتبة بالشرطة"><i class="fa-solid fa-crown"></i></span>`;
+}
+
+/** أنا إقدر أعدّل؟ (المشرف أو روم المعدّل) */
+function canEdit() { return !!(S.account && S.account.canEdit); }
+
+/** قائمة اختيار الرتبة — للمصرّح لهم فقط */
+function rankSelect(o) {
+    if (!canEdit() || !S.ranks.length) return rankTag(o);
+    const opts = S.ranks.map(r =>
+        `<option value="${esc(r.id)}"${r.id === o.rankRoleId ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
+    return `<select class="sel ranksel" data-officer="${esc(o.id)}" title="غيّر الرتبة من هنا — تتعدل بالديسكورد">
+        <option value="">— بدون رتبة —</option>${opts}
+    </select>${o.rankIsCustom ? ' <span class="tag rank" title="رتبة مخصّصة من الموقع"><i class="fa-solid fa-pen"></i></span>' : ''}`;
 }
 function emptyRow(cols, ic, title, sub) {
     return `<tr><td colspan="${cols}"><div class="empty"><i class="fa-solid ${ic}"></i><b>${esc(title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div></td></tr>`;
@@ -583,7 +596,7 @@ function renderAffairs() {
         <td>
             <div class="rowacts">
                 <button class="iconbtn" onclick="openProfile('${o.id}')" title="الملف الكامل"><i class="fa-solid fa-folder-open"></i></button>
-                <button class="iconbtn b" onclick="openEdit('${o.id}')" title="تعديل"><i class="fa-solid fa-pen"></i></button>
+                ${canEdit() ? `<button class="iconbtn b" onclick="openEdit('${o.id}')" title="تعديل"><i class="fa-solid fa-pen"></i></button>` : ''}
             </div>
         </td>
     </tr>`).join('');
@@ -637,7 +650,7 @@ function renderAcademy() {
         <td>
             <div class="rowacts">
                 <button class="iconbtn" onclick="openProfile('${o.id}')" title="الملف الكامل"><i class="fa-solid fa-folder-open"></i></button>
-                <button class="iconbtn b" onclick="openEdit('${o.id}')" title="تعديل"><i class="fa-solid fa-pen"></i></button>
+                ${canEdit() ? `<button class="iconbtn b" onclick="openEdit('${o.id}')" title="تعديل"><i class="fa-solid fa-pen"></i></button>` : ''}
             </div>
         </td>
     </tr>`).join('');
@@ -739,8 +752,18 @@ function renderAccounts() {
     let list = S.accounts.filter(a => matchQ({ ...a, name: a.charName, rank: '' }, q));
     if (f) list = list.filter(a => a.status === f);
 
-    if (!S.accounts.length) { tb.innerHTML = emptyRow(8, 'fa-user-shield', 'ما فيه تسجيلات بعد', 'أول ما أحد يسجّل بيظهر هنا'); return; }
-    if (!list.length) { tb.innerHTML = emptyRow(8, 'fa-magnifying-glass', 'ما فيه نتائج'); return; }
+    if (!S.accounts.length) { tb.innerHTML = emptyRow(9, 'fa-user-shield', 'ما فيه تسجيلات بعد', 'أول ما أحد يسجّل بيظهر هنا'); return; }
+    if (!list.length) { tb.innerHTML = emptyRow(9, 'fa-magnifying-glass', 'ما فيه نتائج'); return; }
+
+    const editTag = (a) => {
+        if (a.isAdmin) return '<span class="tag rank" title="المشرف الأول"><i class="fa-solid fa-crown"></i> مشرف</span>';
+        if (a.canEdit) {
+            const via = a.editVia === 'granted' ? 'منحتها له يدوي'
+                : (a.editVia === 'role' ? 'عنده روم المعدّل' : 'معدّل');
+            return `<span class="tag ok" title="${esc(via)}"><i class="fa-solid fa-pen"></i> يعدّل</span>`;
+        }
+        return '<span class="tag mute" title="يشوف بس ما يعدّل"><i class="fa-solid fa-eye"></i> عرض فقط</span>';
+    };
 
     tb.innerHTML = list.map(a => `
     <tr>
@@ -749,7 +772,7 @@ function renderAccounts() {
                 ${a.avatar ? `<img class="ava" src="${esc(a.avatar)}" alt="">` : `<div class="ava">${esc(initials(a.charName))}</div>`}
                 <div class="nm">
                     <b>${esc(a.charName || a.username)}</b>
-                    <div class="mt"><span>${esc(a.username)}</span>${a.isAdmin ? ' <span class="tag rank" style="font-size:10px">مشرف</span>' : ''}</div>
+                    <div class="mt"><span>${esc(a.username)}</span></div>
                 </div>
             </div>
         </td>
@@ -760,6 +783,7 @@ function renderAccounts() {
         <td>${a.status === 'approved' ? '<span class="tag ok">مفعّل</span>'
             : a.status === 'pending' ? '<span class="tag leave">بانتظار</span>'
                 : '<span class="tag bad">موقوف</span>'}</td>
+        <td>${S.isAdmin && !a.isAdmin ? editTag(a) : editTag(a)}</td>
         <td>
             <div class="num">${fmtRel(a.lastLoginAt)}</div>
             <div style="font-size:10.5px;color:var(--tx-3)">${arabicNum(a.loginCount)} دخول</div>
@@ -769,6 +793,7 @@ function renderAccounts() {
                 ${S.isAdmin ? `
                 ${a.status !== 'approved' ? `<button class="iconbtn" style="color:var(--ok)" onclick="accAction('${a.id}','approved')" title="موافقة"><i class="fa-solid fa-check"></i></button>` : ''}
                 ${a.status !== 'suspended' ? `<button class="iconbtn b" onclick="accAction('${a.id}','suspended')" title="إيقاف"><i class="fa-solid fa-ban"></i></button>` : ''}
+                ${a.isAdmin ? '' : `<button class="iconbtn" onclick="accEditToggle('${a.id}')" title="${a.canEdit ? 'اسحب صلاحية التعديل' : 'أعطه صلاحية التعديل'}"><i class="fa-solid fa-pen-ruler"></i></button>`}
                 <button class="iconbtn" onclick="accReset('${a.id}')" title="يمسح تسجيله يعيد تسجيله"><i class="fa-solid fa-rotate-left"></i></button>
                 <button class="iconbtn" onclick="openAccount('${a.id}')" title="تفاصيل"><i class="fa-solid fa-eye"></i></button>
                 ` : `<button class="iconbtn" onclick="openAccount('${a.id}')" title="تفاصيل"><i class="fa-solid fa-eye"></i></button>`}
@@ -776,6 +801,18 @@ function renderAccounts() {
         </td>
     </tr>`).join('');
 }
+
+async function accEditToggle(id) {
+    const a = S.accounts.find(x => x.id === id);
+    if (!a) return;
+    const give = !a.canEdit;
+    if (!give && !confirm(`تسحب صلاحية التعديل عن ${a.charName}؟`)) return;
+    try {
+        await api(`/api/accounts/${id}/can-edit`, { method: 'POST', body: { canEdit: give } });
+        toast(give ? `أُعطيت صلاحية التعديل ✓` : `سُحبت صلاحية التعديل`, 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+}
+window.accEditToggle = accEditToggle;
 
 async function accAction(id, status) {
     let reason = null;
@@ -920,7 +957,74 @@ $('btnSaveRanks').addEventListener('click', async () => {
 function afterRanksLoaded() {
     fillRankSelects();
     renderAffairs(); renderAcademy();
+    loadPermRoles();
 }
+
+/* ------------------------------ صلاحيات التعديل ------------------------------ */
+let permState = { ids: [] };
+
+async function loadPermRoles() {
+    if (!S.isAdmin) return;
+    try {
+        const [st, und] = await Promise.all([api('/api/settings'), api('/api/roles/undetected')]);
+        permState.ids = st.editorRoleIds || [];
+        S.allRoles = S.allRoles || [];
+        // نجمع: الروم المعروفة + اللي ما انكشفت
+        const map = new Map();
+        for (const r of S.allRoles) map.set(r.id, { id: r.id, name: r.name, members: r.members || 0, type: r.type });
+        for (const r of und.roles) if (!map.has(r.id)) map.set(r.id, { id: r.id, name: r.name, members: r.members || 0, type: 'other' });
+        S.permRoles = [...map.values()].sort((a, b) => (b.members - a.members) || a.name.localeCompare(b.name, 'en'));
+        $('tabPerms').classList.remove('hide');
+        renderPermRoles();
+    } catch { }
+}
+
+function renderPermRoles() {
+    const box = $('permRoleList');
+    const all = S.permRoles || [];
+    const q = $('srchPermRoles').querySelector('input').value || '';
+    const list = q ? all.filter(r => fold(r.name).includes(fold(q))) : all;
+
+    $('permWarn').innerHTML = permState.ids.length
+        ? `أي أحد عنده الروم المختار يقدر يعدّل. حالياً: <b>${arabicNum(permState.ids.length)}</b> روم.`
+        : 'ما اخترت أي روم — <b>أنت فقط</b> تقدر تعدّل.';
+
+    if (!list.length) { box.innerHTML = '<div class="empty"><i class="fa-solid fa-magnifying-glass"></i><b>ما فيه نتائج</b></div>'; return; }
+
+    box.innerHTML = list.map(r => {
+        const on = permState.ids.includes(r.id);
+        return `
+        <label class="sw" style="display:flex;align-items:center;gap:11px;padding:11px 13px;background:rgba(4,8,15,.4);border:1px solid ${on ? 'rgba(217,180,91,.4)' : 'var(--line-2)'};border-radius:var(--r);margin-bottom:8px;cursor:pointer">
+            <input type="checkbox" data-prole="${esc(r.id)}" ${on ? 'checked' : ''} style="width:17px;height:17px;accent-color:var(--gold)">
+            <span style="flex:1;min-width:0">
+                <b style="font-size:13.5px;color:var(--tx);display:block">${esc(r.name)}</b>
+                <span class="mono" style="font-size:10.5px;opacity:.55">${esc(r.id)}</span>
+            </span>
+            <span class="tag" style="flex:none">${arabicNum(r.members || 0)} عضو</span>
+        </label>`;
+    }).join('');
+}
+
+$('permRoleList').addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-prole]');
+    if (!cb) return;
+    const id = cb.dataset.prole;
+    permState.ids = permState.ids.filter(x => x !== id);
+    if (cb.checked) permState.ids.push(id);
+    renderPermRoles();
+});
+
+$('btnSavePerms').addEventListener('click', async () => {
+    const b = $('btnSavePerms');
+    b.disabled = true; b.innerHTML = '<span class="load"></span>';
+    try {
+        const r = await api('/api/settings/editor-roles', { method: 'POST', body: { ids: permState.ids } });
+        toast(`تم — صار ${arabicNum(r.editorRoleIds.length)} روم يعطي صلاحية التعديل`, 'ok', 4000);
+        await loadPermRoles();
+        if (S.isAdmin) loadLogs();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { b.disabled = false; b.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ'; }
+});
 
 /* --- إضافة رومات ما انكشفت تلقائياً (فاضية) --- */
 $('btnAddRoles').addEventListener('click', async () => {
@@ -967,6 +1071,7 @@ window.openProfile = async function (id) {
         const d = await api('/api/officers/' + id);
         $('pfSub').textContent = `${d.officer.name} • ${d.officer.rank}`;
         $('pfEdit').onclick = () => { closeOv('ovProfile'); openEdit(id); };
+        $('pfEdit').style.display = canEdit() ? '' : 'none';
         $('pfBody').innerHTML = renderProfile(d);
     } catch (e) {
         $('pfSub').textContent = '—';
@@ -1080,6 +1185,7 @@ function renderProfile(d) {
                 ${topCrown(o)}
                 ${statusTag(o.status)}
                 ${o.isLSPD ? '<span class="tag ck"><i class="fa-solid fa-shield-halved"></i> LSPD</span>' : ''}
+                ${!o.isLSPD ? '<span class="tag mute" title="ما عنده رتبة LSPD"><i class="fa-solid fa-triangle-exclamation"></i> بدون LSPD</span>' : ''}
             </div>
         </div>
     </div>
@@ -1121,7 +1227,7 @@ function renderProfile(d) {
     ${certsHtml}
 
     <div class="sec-t"><i class="fa-solid fa-user-tie"></i> المسؤوليات
-        <span>${arabicNum(duties.length)}${S.isAdmin ? ' • <button class="btn btn-ghost btn-sm" onclick="openDuties(\'' + esc(o.id) + '\')"><i class="fa-solid fa-pen"></i> تعديل</button>' : ''}</span>
+        <span>${arabicNum(duties.length)}${canEdit() ? ' • <button class="btn btn-ghost btn-sm" onclick="openDuties(\'' + esc(o.id) + '\')"><i class="fa-solid fa-pen"></i> تعديل</button>' : ''}</span>
     </div>
     ${dutiesHtml}
 

@@ -203,6 +203,9 @@
                 <button class="tab" data-v="ranks" id="tabRanks" style="display:none">
                     <i class="fa-solid fa-layer-group"></i> الأدوار والمسؤوليات
                 </button>
+                <button class="tab" data-v="perms" id="tabPerms" style="display:none">
+                    <i class="fa-solid fa-user-shield"></i> صلاحيات التعديل
+                </button>
                 <button class="tab" data-v="accounts">
                     <i class="fa-solid fa-user-shield"></i> حسابات الموقع <span class="c" id="cAccounts">0</span>
                 </button>
@@ -373,6 +376,7 @@
                                 <th>كوبى آى دى</th>
                                 <th>التحقق</th>
                                 <th>الحالة</th>
+                                <th>صلاحية التعديل</th>
                                 <th>آخر دخول</th>
                                 <th class="num-c" style="width:130px">إجراءات</th>
                             </tr>
@@ -411,6 +415,41 @@
                         </span>
                     </div>
                     <div id="rankList"></div>
+                </div>
+            </section>
+
+            <!-- ============ الصلاحيات ============ -->
+            <section class="panel hide" id="v-perms">
+                <div class="panel-h">
+                    <div>
+                        <h2>صلاحيات التعديل</h2>
+                        <div class="sub">أنت المشرف الأول — وقرر مين بعدك يقدر يعدّل</div>
+                    </div>
+                    <div class="sp"></div>
+                    <button class="btn btn-gold btn-sm" id="btnSavePerms">
+                        <i class="fa-solid fa-floppy-disk"></i> حفظ
+                    </button>
+                </div>
+                <div class="mo-b" style="padding:16px 20px">
+                    <div class="msg msg-info" style="margin:0 0 16px">
+                        <i class="fa-solid fa-circle-info"></i>
+                        <span>
+                            اللي ما عنده صلاحية يقدر <b>يشوف</b> كل شي، بس ما يقدر يعدّل ولا يعطي رتب ولا مسؤوليات.
+                            الإيقاف عن الدخول وإعطاؤه صلاحية يدوي من جدول الحسابات.
+                        </span>
+                    </div>
+
+                    <div class="sec-t"><i class="fa-solid fa-shield-halved"></i> روم معطي الصلاحية</div>
+                    <div class="msg msg-warn" style="margin:0 0 12px">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span id="permWarn">ما اخترت أي روم — <b>أنت فقط</b> تقدر تعدّل.</span>
+                    </div>
+                    <div class="search" id="srchPermRoles" style="max-width:100%;margin-bottom:12px">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="search" placeholder="دور على روم…">
+                        <button class="clr" type="button"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div id="permRoleList"></div>
                 </div>
             </section>
 
