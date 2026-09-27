@@ -174,6 +174,7 @@ $('formLogin').addEventListener('submit', async e => {
     const token = $('lToken').value.trim();
     if (!copyId && !token) return showMsg($('lMsg'), 'اكتب كوبى آى دى');
     $('lMsg').innerHTML = '';
+    checkBotHealth();
     try {
         const r = await api('/api/auth/login', { method: 'POST', body: { copyId, token } });
         afterAuth(r);
@@ -237,6 +238,59 @@ $('btnLogout').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { }
     hardLogout('تم تسجيل خروجك.');
 });
+
+/* ------------------------------ تشخيص حالة البوت ------------------------------ */
+/* يفحص البوت ويقول بالضبط وش المشكلة — بدل ما نخمن */
+async function checkBotHealth() {
+    let d;
+    try {
+        const r = await fetch('/api/health');
+        d = await r.json();
+    } catch { return; }
+
+    const box = $('botWarn');
+    const problems = [];
+
+    if (!d.botReady) {
+        problems.push({
+            t: 'البوت ما قدر يتصل بالديسكورد',
+            d: d.loginError
+                ? `السبب: ${d.loginError}`
+                : 'تأكد إن متغيّر BOT_TOKEN صحيح على السيرفر.',
+            f: 'راجع المفاتيح (Environment) في Render وأعد التشغيل (Restart).'
+        });
+    } else if (!d.activeGuildId) {
+        problems.push({
+            t: 'البوت متصل بس مو داخل سيرفر الشرطة',
+            d: 'ضيف البوت لسيرفر الشرطة من رابط الدعوة وحيّطه بصلاحية View Server.',
+            f: ''
+        });
+    } else if (d.guildMatchedConfig === false) {
+        problems.push({
+            t: `البوت داخل "${d.activeGuildName}" بس مو السيرفر المضبوط`,
+            d: `المضبوط حالياً: ${d.configuredGuildIds.join(', ')}`,
+            f: `حط المتغيّر GUILD_ID = ${d.activeGuildId}`
+        });
+    }
+
+    if (!problems.length) { box.classList.add('hide'); return; }
+
+    box.innerHTML = problems.map(p => `
+        <div class="msg msg-warn" style="flex-direction:column;gap:7px;align-items:stretch">
+            <div style="display:flex;gap:9px;align-items:center;font-weight:800">
+                <i class="fa-solid fa-triangle-exclamation"></i><span>${esc(p.t)}</span>
+            </div>
+            <div style="font-size:12.5px;opacity:.9;line-height:1.7">${esc(p.d)}</div>
+            ${p.f ? `<div class="mono" style="font-size:11.5px;background:rgba(0,0,0,.35);padding:7px 10px;border-radius:6px;word-break:break-all">${esc(p.f)}</div>` : ''}
+        </div>`).join('') +
+        `<details style="margin-top:9px;font-size:12px;color:var(--tx-3)">
+            <summary style="cursor:pointer">كل السيرفرات اللي البوت داخلها</summary>
+            <div class="mono" style="margin-top:7px;line-height:2;font-size:11.5px">
+                ${(d.botGuilds || []).map(g => `${esc(g.name)} → ${esc(g.id)}`).join('<br>') || 'ما لقى أي سيرفر'}
+            </div>
+        </details>`;
+    box.classList.remove('hide');
+}
 
 /* ------------------------------ الاتصال اللحظي ------------------------------ */
 function connectLive() {
@@ -381,13 +435,13 @@ function emptyRow(cols, ic, title, sub) {
 }
 
 /** رسالة واضحة بدل ما يبقى سهم يدور للأبد */
-function noDataRow(cols, kind) {
+function noDataRow(cols) {
     if (S.botOnline) {
         return loadRow(cols).replace('<span class="load"></span>',
             `<i class="fa-solid fa-spinner"></i><b>جاري قراءة أفراد الشرطة…</b><span>ثواني وتظهر عندك</span>`);
     }
     return emptyRow(cols, 'fa-plug-circle-xmark', 'البوت غير متصل بالديسكورد',
-        'تأكد إن توكن البوت صحيح وإن السيرفر محدد بـ GUILD_ID — جرّب تحديث بعد ما يشتغل');
+        'شوف التنبيه فوق صفحة الدخول — بيقولك بالضبط وش ناقص');
 }
 function loadRow(cols) {
     return `<tr><td colspan="${cols}"><div class="empty"><span class="load"></span></div></td></tr>`;
@@ -891,12 +945,17 @@ $('btnRefresh').addEventListener('click', async () => {
 /* ------------------------------ الإقلاع ------------------------------ */
 (async function boot() {
     setLive(false);
-    if (!S.token) return;
-    try {
-        const r = await api('/api/auth/me');
-        S.account = r.account; S.isAdmin = !!r.account.isAdmin;
-        afterAuth({ token: S.token, account: r.account });
-    } catch {
-        hardLogout();
+    checkBotHealth();
+    if (S.token) {
+        try {
+            const r = await api('/api/auth/me');
+            S.account = r.account; S.isAdmin = !!r.account.isAdmin;
+            afterAuth({ token: S.token, account: r.account });
+        } catch { hardLogout(); }
     }
+    // فاحص دوري: لو البوت اتصل متأخر، يختفي التنبيه لوحده
+    setInterval(() => {
+        const box = $('botWarn');
+        if (box && !box.classList.contains('hide')) checkBotHealth();
+    }, 15000);
 })();

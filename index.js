@@ -30,7 +30,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 const CONFIG = {
     token: process.env.BOT_TOKEN,
 
-    guildId: process.env.GUILD_ID || '1547538061661962240',
+    // السيرفرات: يقبل أكثر من آيدي مفصول بفاصلة. الافتراضي: سيرفر شرطة ET
+    guildIds: (process.env.GUILD_ID || '1553263389403254814')
+        .split(',').map(s => s.trim()).filter(Boolean),
 
     // مشرفين الموقع (لديهم كل الصلاحيات)
     adminIds: (process.env.ADMIN_IDS || '771747917040058388')
@@ -466,6 +468,47 @@ function extractHours(text) {
     return null;
 }
 
+/* ---------------------------- حالة البوت ---------------------------- */
+
+let loginError = null;
+
+/** يختار السيرفر المطلوب من أول آيدي لقيه، أو أكبر سيرفر كاحتياط */
+async function resolveGuild() {
+    if (!client.isReady()) return null;
+    for (const id of CONFIG.guildIds) {
+        try {
+            const g = client.guilds.cache.get(id) || await client.guilds.fetch(id);
+            if (g) return g;
+        } catch { /* السيرفر مو موجود أو البوت مو داخله — نجرب التالي */ }
+    }
+    if (client.guilds.cache.size > 0) {
+        const list = [...client.guilds.cache.values()].sort((a, b) => b.memberCount - a.memberCount);
+        const pick = list[0];
+        console.warn(`[تحذير] آيدي السيرفر (${CONFIG.guildIds.join(', ')}) ما لقيته عند البوت.`);
+        console.warn(`[تحذير] راح يستخدم السيرفر الأكبر: "${pick.name}"`);
+        console.warn(`[تحذير] الآيدي الصحيح — حطه بمتغيّر GUILD_ID:  ${pick.id}`);
+        return pick;
+    }
+    return null;
+}
+
+/** ملخص الحالة — المشرف يقدر يفحصه من المتصفح على /api/health */
+function botDiagnostics() {
+    return {
+        botReady: client.isReady(),
+        botTag: client.user?.tag || null,
+        loginError,
+        configuredGuildIds: CONFIG.guildIds,
+        activeGuildId: guildRef?.id || null,
+        activeGuildName: guildRef?.name || null,
+        activeGuildMembers: guildRef?.memberCount ?? null,
+        guildMatchedConfig: !!guildRef && CONFIG.guildIds.includes(guildRef.id),
+        botGuilds: [...client.guilds.cache.values()]
+            .map(g => ({ id: g.id, name: g.name, members: g.memberCount }))
+            .sort((a, b) => b.members - a.members)
+    };
+}
+
 /* ---------------------------- مزامنة السجل ---------------------------- */
 
 async function sweepAuditLogs(guild) {
@@ -731,7 +774,7 @@ async function refreshRegistry(force = false) {
     if (!client.isReady()) return;
     isSyncing = true;
     try {
-        const guild = guildRef || (await client.guilds.fetch(CONFIG.guildId).catch(() => null));
+        const guild = guildRef || await resolveGuild();
         if (!guild) { isSyncing = false; return; }
         guildRef = guild;
 
@@ -839,8 +882,19 @@ async function verifyIdentity({ username, charName, copyId }) {
     if (!/^\d{17,19}$/.test(String(copyId || ''))) {
         return { ok: false, code: 'bad-id', message: 'كوبى آى دى غير صحيح — لازم 17 رقم' };
     }
-    if (!client.isReady() || !guildRef) {
-        return { ok: false, code: 'bot-offline', message: 'البوت غير متصل بالديسكورد حالياً — جرّب بعد قليل' };
+    if (!client.isReady()) {
+        return {
+            ok: false, code: 'bot-offline',
+            message: loginError
+                ? `البوت ما قدر يتصل بالديسكورد: ${loginError}`
+                : 'البوت ما قدر يتصل بالديسكورد بعد — تأكد إن التوكن صحيح وإن البوت شغّال'
+        };
+    }
+    if (!guildRef) {
+        return {
+            ok: false, code: 'bot-no-guild',
+            message: 'البوت متصل بالديسكورد بس مو داخل سيرفر الشرطة — ضيفه للسيرفر وحيّطه'
+        };
     }
 
     let member;
@@ -1248,13 +1302,17 @@ app.post('/api/refresh', requireAuth, requireAdmin, async (req, res) => {
     res.json({ ok: true, count: officersCache.length });
 });
 
-app.get('/api/health', (req, res) => res.json({
-    ok: true,
-    bot: client.isReady() ? client.user.tag : 'offline',
-    officers: officersCache.length,
-    accounts: Object.keys(db.accounts).length,
-    online: [...presence.values()].filter(p => p.online).length
-}));
+app.get('/api/health', (req, res) => {
+    const d = botDiagnostics();
+    res.json({
+        ok: d.botReady && !!d.activeGuildId,
+        ...d,
+        officers: officersCache.length,
+        accounts: Object.keys(db.accounts).length,
+        online: [...presence.values()].filter(p => p.online).length,
+        registryReady
+    });
+});
 
 /* ============================================================================
  * 8) الحضور اللحظي (Socket.IO)
@@ -1360,12 +1418,18 @@ io.on('connection', (socket) => {
  * ==========================================================================*/
 
 client.on('ready', async () => {
+    loginError = null;
     console.log(`[تم الاتصال] البوت جاهز: ${client.user.tag}`);
-    guildRef = client.guilds.cache.get(CONFIG.guildId) || await client.guilds.fetch(CONFIG.guildId).catch(() => null);
+    console.log(`[البوت داخل ${client.guilds.cache.size} سيرفر:]`);
+    for (const g of client.guilds.cache.values()) {
+        console.log(`   • "${g.name}"  —  ${g.id}  (${g.memberCount} عضو)`);
+    }
+
+    guildRef = await resolveGuild();
     if (!guildRef) {
-        console.warn('[تحذير] ما لقيت السيرفر — تأكد من GUILD_ID');
+        console.error('[خطأ] البوت مو داخل أي سيرفر! ضيفه لسيرفر الشرطة وحيّطه.');
     } else {
-        console.log(`[السيرفر] ${guildRef.name} (${guildRef.memberCount} عضو)`);
+        console.log(`[السيرفر المستخدم] ${guildRef.name} — ${guildRef.id} (${guildRef.memberCount} عضو)`);
     }
 
     refreshRegistry(true).then(async () => {
@@ -1381,7 +1445,7 @@ client.on('ready', async () => {
 });
 
 client.on('guildMemberAdd', async (member) => {
-    if (member.guild.id !== CONFIG.guildId) return;
+    if (!guildRef || member.guild.id !== guildRef.id) return;
     rememberMember(member.id, member);
     const st = officerStore(member.id);
     if (!st.joinedTimestamp) st.joinedTimestamp = member.joinedTimestamp;
@@ -1390,7 +1454,7 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 client.on('guildMemberUpdate', async (oldM, newM) => {
-    if (newM.guild.id !== CONFIG.guildId) return;
+    if (!guildRef || newM.guild.id !== guildRef.id) return;
     rememberMember(newM.id, newM);
     const before = oldM.roles.cache.map(r => r.id).sort().join(',');
     const after = newM.roles.cache.map(r => r.id).sort().join(',');
@@ -1400,7 +1464,7 @@ client.on('guildMemberUpdate', async (oldM, newM) => {
 });
 
 client.on('guildMemberRemove', (member) => {
-    if (member.guild.id !== CONFIG.guildId) return;
+    if (!guildRef || member.guild.id !== guildRef.id) return;
     addLog('عضو غادر السيرفر', { by: 'البوت', target: `${member.displayName || member.user.username} (${member.id})` });
     const st = officerStore(member.id);
     st.leftAt = Date.now();
@@ -1409,7 +1473,7 @@ client.on('guildMemberRemove', (member) => {
 });
 
 client.on('messageCreate', async (message) => {
-    if (!guildRef || message.guild?.id !== CONFIG.guildId) return;
+    if (!guildRef || message.guild?.id !== guildRef.id) return;
     const text = fullMessage(message);
 
     if (CONFIG.reportChannels.includes(message.channel.id)) {
@@ -1464,7 +1528,8 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-client.on('error', (e) => console.error('[خطأ البوت]', e.message));
+client.on('error', (e) => { loginError = e.message; console.error('[خطأ البوت]', e.message); });
+client.on('shardError', (e) => console.error('[خطأ اتصال]', e.message));
 
 /* ============================================================================
  * 10) التشغيل
@@ -1474,8 +1539,22 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`[السيرفر] يعمل على المنفذ ${PORT}`));
 
 if (CONFIG.token) {
-    client.login(CONFIG.token).catch(err => console.error('[فشل الدخول] البوت:', err.message));
+    console.log('[تسجيل الدخول] جاري الاتصال بالديسكورد…');
+    client.login(CONFIG.token).catch(err => {
+        loginError = err.message;
+        console.error('==============================================');
+        console.error('[فشل تسجيل دخول البوت]:', err.message);
+        if (/token/i.test(err.message)) {
+            console.error('→ التوكن غلط أو خلصت صلاحيته. سوِّ توكن جديد من Discord Developer Portal');
+            console.error('→ وحطه بمتغيّر BOT_TOKEN على السيرفر (تأكد ما فيه مسافات زايدة)');
+        }
+        if (/intents/i.test(err.message)) {
+            console.error('→ شغّل Presence Intent من Developer Portal ثم أعد التشغيل');
+        }
+        console.error('==============================================');
+    });
 } else {
+    loginError = 'ما في BOT_TOKEN على السيرفر';
     console.log('[تنبيه] ما في BOT_TOKEN — وضع العرض يعمل بدون ديسكورد.');
 }
 
