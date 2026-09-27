@@ -581,6 +581,25 @@ table.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 .pill.gold { background: var(--gold-glow); border-color: rgba(217, 180, 91, .25); color: var(--gold-2); }
 .pill.star { background: rgba(217, 180, 91, .08); border-color: rgba(217, 180, 91, .18); color: var(--gold-2); }
 
+/* اختيار الرتبة داخل الجدول */
+.sel.ranksel {
+    max-width: 190px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--gold-2);
+    background: rgba(217, 180, 91, .07);
+    border-color: rgba(217, 180, 91, .22);
+    cursor: pointer;
+}
+.sel.ranksel:hover { border-color: rgba(217, 180, 91, .45); }
+.sel.ranksel:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
+.sel.ranksel:disabled { opacity: .5; cursor: wait; }
+.sel.ranksel option { background: #0e1522; color: var(--tx); }
+
+/* نقطة الاسترايك بالخط الزمني */
+.tl-i.t-strike::before { border-color: var(--bad); box-shadow: 0 0 0 3px rgba(248, 113, 113, .14); }
+
 .rowacts { display: flex; gap: 5px; justify-content: center; }
 .iconbtn {
     width: 30px; height: 30px;

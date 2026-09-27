@@ -56,6 +56,23 @@ const CONFIG = {
         '1521415106876014612'
     ],
 
+    // ============ رومات الخصم والنقاط والترقيات ============
+    // روم الخصم (Strike) — خصم نقاط
+    strikeChannels: [
+        '1553263396047163451'
+    ],
+    // روم النقاط (Points) — إضافة/خصم نقاط
+    pointsChannels: [
+        '1553263396047163448'
+    ],
+    // روم الترقيات (Promotion) — ترقية / خفض رتبة
+    promotionChannels: [
+        '1553263396047163450'
+    ],
+
+    // بوت يجيب سجل الروم الثلاثة أول ما يشتغل (كم رسالة يقرأ منها)
+    sanctionsScanLimit: 400,
+
     // رتبة / روم الشرطة — أي أحد عنده وحدة يدخل الجدول تلقائياً
     memberRoles: [
         '1553263391215456330', // LSPD
@@ -131,6 +148,10 @@ function normalizeOfficer(o = {}) {
         hours: o.hours ?? null,
         hoursAuto: o.hoursAuto ?? 0,
         points: Number.isFinite(+o.points) ? +o.points : 0,
+        pointsLog: Array.isArray(o.pointsLog) ? o.pointsLog : [],
+        promotions: Array.isArray(o.promotions) ? o.promotions : [],
+        strikeCount: o.strikeCount ?? 0,
+        lastStrikeAt: o.lastStrikeAt ?? null,
         reports: Array.isArray(o.reports) ? o.reports : [],
         wings: Array.isArray(o.wings) ? o.wings : [],
         disabled: !!o.disabled,
@@ -148,10 +169,11 @@ function normalizeOfficer(o = {}) {
 
 function emptyDb() {
     return {
-        version: 2,
+        version: 3,
         officers: {},
         accounts: {},
         logs: [],
+        rankConfig: [],
         meta: { auditSweptAt: 0, reportsSweptAt: 0 }
     };
 }
@@ -175,6 +197,7 @@ function loadDb() {
     if (!fresh.officers || typeof fresh.officers !== 'object') fresh.officers = {};
     if (!fresh.accounts || typeof fresh.accounts !== 'object') fresh.accounts = {};
     if (!Array.isArray(fresh.logs)) fresh.logs = [];
+    if (!Array.isArray(fresh.rankConfig)) fresh.rankConfig = [];
     if (!fresh.meta || typeof fresh.meta !== 'object') fresh.meta = { auditSweptAt: 0, reportsSweptAt: 0 };
 
     // ترحيل من النسخة القديمة (خريطة مسطحة userId -> data)
@@ -248,6 +271,23 @@ function officerStore(id) {
  * ==========================================================================*/
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/** أقدم آيدي في الدفعة — بديل آمن عن messages.last() */
+function oldestId(messages) {
+    let oldest = null;
+    if (messages && typeof messages.values === 'function') {
+        for (const m of messages.values()) {
+            const id = m && m.id ? String(m.id) : null;
+            if (id && (oldest === null || id < oldest)) oldest = id;
+        }
+    }
+    return oldest;
+}
+/** ترتيب الرسائل من الأقدم للأحدث */
+function byOldest(messages) {
+    return [...(messages.values ? messages.values() : [])]
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+}
 
 function stripDiacritics(s) {
     return String(s || '')
@@ -328,22 +368,141 @@ function parseIdentity(raw) {
     return { full, callsign, charName: charName || rest, oocName };
 }
 
-function memberRank(member) {
-    if (!member) return null;
-    const names = member.roles.cache.map(r => r.name).filter(Boolean);
+/** ينظّف اسم الرتبة من الزخرفة (نجوم، إيموجي، شرطات) ليبقى الإنجليزي نظيف */
+function cleanRoleName(name) {
+    return String(name || '')
+        .replace(/<a?:\w+:\d+>/g, ' ')   // إيموجي مخصّص
+        .replace(/[\u200B-\u200F\uFE0E\uFE0F]/g, ' ')
+        .replace(/[★☆✦✧✪✫]/g, ' ')
+        .replace(/[^\p{L}\p{N}\s.\-()/&']/gu, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+/* ------------------------- إدارة الرتب ------------------------- */
+/* الرتب تنقرأ من رومات الديسكورد مباشرة، وترتيبها يتحكم به المشرف من الموقع.
+   الصيغة المحفوظة: db.rankConfig = [{ id, name, order, enabled }]  — order أصغر = رتبة أعلى */
+
+/** كلمات دالة على رتبة — أي روم فيها وحدة منها يُعتبر رتبة، حتى لو أضفت رتبة جديدة */
+const RANK_NOUNS = [
+    'chief', 'deputy', 'captain', 'lieutenant', 'sergeant', 'officer', 'cadet',
+    'corporal', 'detective', 'inspector', 'marshal', 'commander', 'supervisor',
+    'constable', 'trooper', 'agent', 'sheriff', 'patrolman', 'recruit'
+];
+
+function rankDefForRoleName(roleName) {
+    const n = normKey(roleName);
+    if (!n) return null;
+
+    // 1) تطابق كامل أو جزئي مع القوائم المعروفة
     for (const def of CONFIG.ranks) {
         for (const kw of def.kw) {
             const k = normKey(kw);
-            if (names.some(n => normKey(n) === k)) return def;
+            if (k && n === k) return def;
         }
     }
     for (const def of CONFIG.ranks) {
         for (const kw of def.kw) {
             const k = normKey(kw);
-            if (k.length >= 4 && names.some(n => normKey(n).includes(k))) return def;
+            if (k.length >= 4 && n.includes(k)) return def;
         }
+    }
+
+    // 2) أي كلمة دالة على رتبة (يغطي الرتب الجديدة تلقائياً)
+    const words = cleanRoleName(roleName)
+        .split(/[\s_\-/|(),.]+/)
+        .map(w => normKey(w))
+        .filter(Boolean);
+    if (words.some(w => RANK_NOUNS.includes(w))) {
+        return { level: 50, en: cleanRoleName(roleName) || roleName, ar: '', kw: [], guessed: true };
     }
     return null;
+}
+
+/** يكتشف رومات الرتب في السيرفر — يستثني رومات الشهادات ورومات الشرطة والكاديت */
+function detectRankRoles(guild) {
+    if (!guild) return [];
+    const out = [];
+    for (const role of guild.roles.cache.values()) {
+        if (role.managed) continue;
+        if (role.id === guild.id) continue;
+        if (CONFIG.certifications[role.id]) continue;
+        if (CONFIG.memberRoles.includes(role.id)) continue;
+        if (CONFIG.cadetRoles.includes(role.id)) continue;
+        if (role.name === '@everyone') continue;
+        const def = rankDefForRoleName(role.name);
+        if (!def) continue;
+        out.push({ id: role.id, name: cleanRoleName(role.name) || role.name, rawName: role.name, position: role.position ?? 0 });
+    }
+    // الأعلى في ديسكورد = رتبة أعلى
+    out.sort((a, b) => b.position - a.position);
+    return out;
+}
+
+/** يدمج المكتشف مع المحفوظ: يحافظ على ترتيب المشرف، ويضيف الجديد تلقائياً */
+function syncRankConfig(guild) {
+    const detected = detectRankRoles(guild);
+    const saved = Array.isArray(db.rankConfig) ? db.rankConfig : [];
+    const savedById = new Map(saved.map(r => [r.id, r]));
+    const result = [];
+    let next = 1;
+
+    for (const d of detected) {
+        const s = savedById.get(d.id);
+        result.push({
+            id: d.id,
+            name: (s && s.name) || d.name,
+            order: s && Number.isFinite(s.order) ? s.order : next,
+            enabled: s ? s.enabled !== false : true,
+            position: d.position
+        });
+        next = Math.max(next, (s && s.order) || next) + 1;
+    }
+    // ترتيب: enabled أول، ثم order تصاعدي
+    result.sort((a, b) => (b.enabled - a.enabled) || (a.order - b.order));
+    db.rankConfig = result;
+    saveDb();
+    return result;
+}
+
+function rankConfigList() {
+    return (Array.isArray(db.rankConfig) ? db.rankConfig : []).filter(r => r.enabled !== false);
+}
+function rankOrder(roleId) {
+    const list = rankConfigList();
+    const i = list.findIndex(r => r.id === roleId);
+    return i === -1 ? 9999 : i;
+}
+function isRankRoleId(roleId) {
+    return rankConfigList().some(r => r.id === roleId);
+}
+
+/** رتبة الفرد = رتبة رومه الأعلى (حسب ترتيب المشرف) */
+function memberRankInfo(member) {
+    if (!member) return null;
+    let best = null;
+    for (const role of member.roles.cache.values()) {
+        if (!isRankRoleId(role.id)) continue;
+        const o = rankOrder(role.id);
+        if (!best || o < best.order) {
+            const cfg = rankConfigList().find(r => r.id === role.id);
+            best = { roleId: role.id, name: cfg?.name || cleanRoleName(role.name) || role.name, order: o };
+        }
+    }
+    if (best) return best;
+    // احتياط: لو ما في rankConfig بعد (أول تشغيل قبل المزامنة)
+    const def = rankDefForRoleName(member.roles.cache.map(r => r.name).join(' '));
+    if (def) return { roleId: null, name: def.en, order: def.level, level: def.level };
+    return null;
+}
+
+/** يرجع رتبة الفرد بالشكل القديم (level) — لل compatibility مع flowed الكود */
+function memberRank(member) {
+    const info = memberRankInfo(member);
+    if (!info) return null;
+    if (info.roleId) return { level: info.order, en: info.name, ar: '', roleId: info.roleId, custom: true };
+    const def = CONFIG.ranks.find(r => r.en === info.name);
+    return def ? { ...def, roleId: null } : { level: info.order, en: info.name, ar: '', roleId: null, custom: true };
 }
 
 function memberCertifications(member) {
@@ -359,8 +518,13 @@ function memberCertifications(member) {
 function isCadetMember(member) {
     if (!member) return false;
     if ([...member.roles.cache.keys()].some(id => CONFIG.cadetRoles.includes(id))) return true;
-    const r = memberRank(member);
-    return !!r && r.level >= 15;
+    const info = memberRankInfo(member);
+    if (!info) return false;
+    // كاديت/سولو كاديت = آخر رتبتين بالترتيب
+    const list = rankConfigList();
+    const i = list.findIndex(r => r.id === info.roleId);
+    if (i === -1) return false;
+    return i >= list.length - 2;
 }
 
 function isMemberOfPolice(member) {
@@ -466,6 +630,226 @@ function extractHours(text) {
     m = t.match(/([\d]+(?:\.\d+)?)\s*(?:ساعة|ساعه|ساعات|hours?|hrs?)/i);
     if (m) return +parseFloat(m[1]).toFixed(2);
     return null;
+}
+
+/* ================= قالب رسائل الخصم / النقاط / الترقيات ================= */
+
+/**
+ * يحوّل رسالة القالب (Embed) لكائن منظّم: الحقول بمفاتيحها.
+ * مثال روم الترقيات:  Officer Name: <@1>  From: X  To: Y  Reason: Z  Coommend By: <@2>
+ */
+function parseTemplate(msg) {
+    const key = s => String(s || '').toLowerCase()
+        .replace(/[\u200B-\u200F]/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
+    const fields = [];
+    let title = '', description = '';
+    for (const emb of (msg.embeds || [])) {
+        if (emb.title && !title) title = emb.title;
+        if (emb.description && !description) description = emb.description;
+        for (const f of (emb.fields || [])) {
+            const k = key(f.name);
+            if (!k) continue;
+            const v = String(f.value ?? '').trim();
+            const hit = fields.find(x => x.key === k);
+            if (hit) hit.value = (hit.value ? hit.value + '\n' : '') + v;
+            else fields.push({ key: k, label: String(f.name).trim(), value: v });
+        }
+    }
+    return {
+        title, description, fields,
+        byKey: (re) => {
+            const f = fields.find(x => re.test(x.key) || re.test(x.label));
+            return f ? f.value : '';
+        },
+        firstId: (re) => {
+            const f = fields.find(x => re.test(x.key) || re.test(x.label));
+            if (f) { const m = f.value.match(/<@!?(\d{17,19})>/); if (m) return m[1]; }
+            return null;
+        },
+        raw: fullMessage(msg)
+    };
+}
+
+/** يستخرج أول رقم "منطقي" — يتجاهل آيدات الديسكورد الطويلة */
+function saneNumber(text) {
+    const m = String(text || '').match(/-?\d+(?:\.\d+)?/g);
+    if (!m) return null;
+    for (const raw of m) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && Math.abs(n) < 100000) return n;
+    }
+    return null;
+}
+
+/** يطبّق حركة نقاط (إضافة/خصم) ويسجّلها بالسجل */
+function applyPoints(memberId, delta, { type, reason, by, byId, at, channelName }) {
+    if (!memberId || !Number.isFinite(delta) || delta === 0) return null;
+    const st = officerStore(memberId);
+    const before = st.points || 0;
+    st.points = Math.max(0, before + delta);
+    const applied = st.points - before;
+    if (applied === 0 && delta < 0) {
+        // النقاط كانت صفر — نسجّل المحاولة بصفر
+    }
+    if (!Array.isArray(st.pointsLog)) st.pointsLog = [];
+    st.pointsLog.unshift({
+        at: at || Date.now(),
+        delta: applied,             // اللي طُبّق فعلاً
+        requested: delta,           // اللي طلبوه
+        balanceAfter: st.points,
+        type, reason: reason || '', by: by || '', byId: byId || null,
+        channel: channelName || ''
+    });
+    if (st.pointsLog.length > 150) st.pointsLog.length = 150;
+    addHistory(memberId, {
+        type: type === 'strike' ? 'strike' : 'points',
+        icon: type === 'strike' ? 'fa-gavel' : 'fa-star',
+        title: type === 'strike' ? 'خصم نقاط (Strike)' : (applied >= 0 ? 'إضافة نقاط' : 'خصم نقاط'),
+        detail: `${applied >= 0 ? '+' : ''}${applied} نقطة — ${before} ← ${st.points}` + (reason ? `\nالسبب: ${reason}` : ''),
+        by: by || 'الديسكورد'
+    });
+    saveDb();
+    return { before, after: st.points, applied, requested: delta };
+}
+
+function handleStrikeMessage(msg) {
+    if (msg.author.bot) return;
+    const t = parseTemplate(msg);
+    const targetId = t.firstId(/officer|staff|member|name|ضابط|عضو/)
+        || extractMention(t.raw, msg);
+    if (!targetId) return;
+
+    // عدد الخصم: من حقل "strike"، أو أول رقم منطقي بالنص
+    let amount = saneNumber(t.byKey(/strike|strikes|deduct|punish|number|count|خصم/));
+    if (amount === null) {
+        const m = t.raw.match(/strike\s*:?\s*(\d+)/i);
+        amount = m ? parseInt(m[1], 10) : saneNumber(t.raw);
+    }
+    if (amount === null || amount <= 0) amount = 1;
+    amount = Math.min(Math.abs(amount), 100000);
+
+    const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '(ما ذكر سبب)';
+    const byId = t.firstId(/commend|by|issued|signed|amir|بامر/) || null;
+    const by = byId ? cachedName(byId) : (t.byKey(/commend|by|issued/));
+
+    const st = officerStore(targetId);
+    st.strikeCount = (st.strikeCount || 0) + 1;
+    st.lastStrikeAt = msg.createdTimestamp;
+
+    const res = applyPoints(targetId, -amount, {
+        type: 'strike',
+        reason,
+        by: byId ? `${by} (${byId})` : (by || 'الديسكورد'),
+        byId,
+        at: msg.createdTimestamp,
+        channelName: msg.channel.name || 'Strike'
+    });
+    if (res) {
+        addLog('خصم نقاط (Strike)', { by: by || 'الديسكورد', byCopyId: byId, target: targetId, details: `-${res.applied} • ${reason}` });
+        refreshRegistry(true);
+    }
+}
+
+function handlePointsMessage(msg) {
+    if (msg.author.bot) return;
+    const t = parseTemplate(msg);
+    const targetId = t.firstId(/officer|staff|member|name|ضابط|عضو/)
+        || extractMention(t.raw, msg);
+    if (!targetId) return;
+
+    const rawVal = t.byKey(/point|points|nadda|نقاط|score/) || t.raw;
+    let amount = saneNumber(rawVal);
+    if (amount === null) return;
+    if (amount < 0) amount = Math.abs(amount);   // الرقم السالب نفسه يدل على الخصم
+    else {
+        // لازم نشوف الإشارة: "-20" معناها خصم
+        const hasMinus = /(^|[\s:>-])-\s*\d/.test(String(rawVal));
+        if (hasMinus) amount = -amount;
+    }
+    const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '';
+    const byId = t.firstId(/commend|by|issued|signed|بامر/) || null;
+    const by = byId ? cachedName(byId) : (t.byKey(/commend|by|issued/) || 'الديسكورد');
+
+    const res = applyPoints(targetId, amount, {
+        type: 'points',
+        reason,
+        by: byId ? `${by} (${byId})` : by,
+        byId,
+        at: msg.createdTimestamp,
+        channelName: msg.channel.name || 'Points'
+    });
+    if (res) {
+        addLog(amount >= 0 ? 'إضافة نقاط' : 'خصم نقاط', { by, byCopyId: byId, target: targetId, details: `${res.applied >= 0 ? '+' : ''}${res.applied} • ${reason}` });
+        refreshRegistry(true);
+    }
+}
+
+function handlePromotionMessage(msg) {
+    if (msg.author.bot) return;
+    const t = parseTemplate(msg);
+    const targetId = t.firstId(/officer|staff|member|name|ضابط|عضو/)
+        || extractMention(t.raw, msg);
+    if (!targetId) return;
+
+    const fromRank = t.byKey(/^from|old|prev|من/) || '';
+    const toRank = t.byKey(/^to$|new|next|الي|الى|إلى/) || '';
+    const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '';
+    const byId = t.firstId(/commend|by|issued|signed|بامر/) || null;
+    const by = byId ? cachedName(byId) : (t.byKey(/commend|by|issued/) || 'الديسكورد');
+
+    const st = officerStore(targetId);
+    if (!Array.isArray(st.promotions)) st.promotions = [];
+    st.promotions.unshift({
+        at: msg.createdTimestamp,
+        from: fromRank || '—', to: toRank || '—',
+        reason, by, byId,
+        channelName: msg.channel.name || 'Promotion'
+    });
+    if (st.promotions.length > 80) st.promotions.length = 80;
+
+    addHistory(targetId, {
+        type: 'promote',
+        icon: 'fa-arrow-trend-up',
+        title: `ترقية: ${fromRank || '—'} ← ${toRank || '—'}`,
+        detail: (reason ? `السبب: ${reason}\n` : '') + `أمرها: ${by}`,
+        by
+    });
+    addLog('ترقية', { by, byCopyId: byId, target: targetId, details: `${fromRank || '—'} ← ${toRank || '—'}${reason ? ' • ' + reason : ''}` });
+    saveDb();
+    refreshRegistry(true);
+}
+
+/** يقرأ أرشيف الرومات الثلاثة أول ما يشتغل */
+async function syncSanctions() {
+    if (!guildRef) return;
+    const map = [
+        { ids: CONFIG.strikeChannels, fn: handleStrikeMessage },
+        { ids: CONFIG.pointsChannels, fn: handlePointsMessage },
+        { ids: CONFIG.promotionChannels, fn: handlePromotionMessage }
+    ];
+    for (const entry of map) {
+        for (const cid of entry.ids) {
+            const channel = await guildRef.channels.fetch(cid).catch(() => null);
+            if (!channel || !channel.isTextBased()) continue;
+            let lastId, count = 0;
+            while (count < CONFIG.sanctionsScanLimit) {
+                const opts = { limit: 100 };
+                if (lastId) opts.before = lastId;
+                const messages = await channel.messages.fetch(opts).catch(() => null);
+                if (!messages || messages.size === 0) break;
+                // من الأقدم للأحدث عشان الحسابات تطلع صح
+                const ordered = byOldest(messages);
+                for (const m of ordered) {
+                    try { entry.fn(m); } catch (e) { console.warn('sanction parse:', e.message); }
+                }
+                count += messages.size;
+                lastId = oldestId(messages);
+                if (messages.size < 100 || !lastId) break;
+            }
+        }
+    }
+    saveDb();
 }
 
 /* ---------------------------- حالة البوت ---------------------------- */
@@ -607,8 +991,8 @@ async function syncJoinDates(guild) {
                     }
                 });
             }
-            lastId = messages.last().id;
-            if (messages.size < 100) break;
+            lastId = oldestId(messages);
+            if (messages.size < 100 || !lastId) break;
         }
     }
     saveDb();
@@ -646,8 +1030,8 @@ async function syncReports() {
                 });
             }
             count += messages.size;
-            lastId = messages.last().id;
-            if (messages.size < 100) break;
+            lastId = oldestId(messages);
+            if (messages.size < 100 || !lastId) break;
         }
     }
     for (const st of Object.values(db.officers)) {
@@ -680,8 +1064,8 @@ async function syncHours() {
                 st.hoursAuto = Math.max(st.hoursAuto || 0, hours);
             }
             count += messages.size;
-            lastId = messages.last().id;
-            if (messages.size < 100) break;
+            lastId = oldestId(messages);
+            if (messages.size < 100 || !lastId) break;
         }
     }
     saveDb();
@@ -692,7 +1076,7 @@ async function syncHours() {
 function buildOfficerRecord(member, now) {
     const st = officerStore(member.id);
     const ident = parseIdentity(member.displayName || member.user.username);
-    const rankDef = memberRank(member);
+    const rankInfo = memberRankInfo(member);
     const certs = memberCertifications(member);
 
     // أوقات ومن أعطى كل شهادة من سجل الديسكورد
@@ -708,11 +1092,11 @@ function buildOfficerRecord(member, now) {
 
     // الرتبة الحالية + من أعطاها
     let rankSource = null;
-    if (rankDef) {
-        const rankRoles = member.roles.cache.filter(r => rankDef.kw.some(kw => normKey(r.name) === normKey(kw)));
-        for (const r of rankRoles) {
-            const ev = st.roleEvents.find(e => e.roleId === r.id && e.kind === 'add');
-            if (ev) { rankSource = { at: ev.at, by: ev.by, byName: cachedName(ev.by), roleName: r.name }; break; }
+    if (rankInfo && rankInfo.roleId) {
+        const role = member.roles.cache.get(rankInfo.roleId);
+        if (role) {
+            const ev = st.roleEvents.find(e => e.roleId === role.id && e.kind === 'add');
+            if (ev) rankSource = { at: ev.at, by: ev.by, byName: cachedName(ev.by), roleName: cleanRoleName(role.name) };
         }
     }
 
@@ -720,6 +1104,7 @@ function buildOfficerRecord(member, now) {
     const days = joinTs ? Math.max(0, Math.floor((now - joinTs) / 86400000)) : 0;
 
     const status = st.disabled ? 'suspended' : (st.onLeave ? 'leave' : 'active');
+    const rankName = st.customRank || (rankInfo ? rankInfo.name : '—');
 
     return {
         id: member.id,
@@ -732,10 +1117,10 @@ function buildOfficerRecord(member, now) {
         oocName: ident.oocName || '',
         isLSPD: [...member.roles.cache.keys()].some(id => CONFIG.memberRoles.includes(id)),
 
-        rank: st.customRank || (rankDef ? rankDef.en : '—'),
-        rankAr: st.customRank ? '' : (rankDef ? rankDef.ar : ''),
-        rankLevel: rankDef ? rankDef.level : 99,
-        rankRoleName: rankSource ? rankSource.roleName : (rankDef ? rankDef.en : null),
+        rank: rankName,
+        rankRoleId: rankInfo?.roleId || null,
+        rankLevel: rankInfo ? rankInfo.order : 9999,
+        rankRoleName: rankSource ? rankSource.roleName : (rankInfo ? rankInfo.name : null),
         rankGrantedAt: rankSource ? rankSource.at : null,
         rankGrantedBy: rankSource ? rankSource.byName : null,
         rankIsCustom: !!st.customRank,
@@ -747,6 +1132,9 @@ function buildOfficerRecord(member, now) {
         hoursManual: st.hours !== null && st.hours !== undefined,
         hoursAuto: +(st.hoursAuto || 0),
         points: st.points || 0,
+        strikeCount: st.strikeCount || 0,
+        lastStrikeAt: st.lastStrikeAt || null,
+        lastPointsChange: (st.pointsLog || [])[0] || null,
         reportsCount: (st.reports || []).length,
 
         joinTs,
@@ -777,6 +1165,9 @@ async function refreshRegistry(force = false) {
         const guild = guildRef || await resolveGuild();
         if (!guild) { isSyncing = false; return; }
         guildRef = guild;
+
+        // نحدّث قائمة الرتب من رومات الديسكورد قبل ما نرتب الأفراد
+        syncRankConfig(guild);
 
         const members = await guild.members.fetch().catch(() => null);
         if (!members) { isSyncing = false; return; }
@@ -975,6 +1366,111 @@ function rateOk(key, max = 8, windowMs = 10 * 60 * 1000) {
     return rec.count <= max;
 }
 
+/* --- إدارة الرتب --- */
+
+/** كل رومات الرتب المكتشفة، مع ترتيب المشرف وحالة التفعيل */
+app.get('/api/ranks', requireAuth, (req, res) => {
+    const detected = detectRankRoles(guildRef);
+    const saved = new Map((db.rankConfig || []).map(r => [r.id, r]));
+    const all = new Map(detected.map(d => [d.id, d]));
+    for (const s of (db.rankConfig || [])) if (!all.has(s.id)) all.set(s.id, { id: s.id, name: s.name, position: null });
+
+    const list = [...all.values()].map(r => ({
+        id: r.id,
+        name: saved.get(r.id)?.name || r.name,
+        rawName: r.rawName || r.name,
+        position: r.position ?? null,
+        order: saved.get(r.id)?.order ?? null,
+        enabled: saved.get(r.id)?.enabled !== false,
+        missing: !detected.some(d => d.id === r.id)   // حُذف من الديسكورد
+    })).sort((a, b) => {
+        if (a.enabled !== b.enabled) return b.enabled - a.enabled;
+        const ao = a.order ?? 5000, bo = b.order ?? 5000;
+        if (ao !== bo) return ao - bo;
+        return (b.position ?? 0) - (a.position ?? 0);
+    });
+
+    res.json({ ok: true, ranks: list, canEdit: S_isAdmin(req) });
+});
+function S_isAdmin(req) { return CONFIG.adminIds.includes(req.account.copyId); }
+
+/** يحفظ ترتيب الرتب وتفعيلها */
+app.post('/api/ranks', requireAuth, requireAdmin, (req, res) => {
+    const list = Array.isArray(req.body?.ranks) ? req.body.ranks : null;
+    if (!list) return res.status(400).json({ error: 'bad-request' });
+
+    const valid = new Set(detectRankRoles(guildRef).map(r => r.id));
+    const current = new Map((db.rankConfig || []).map(r => [r.id, r]));
+    const next = [];
+
+    list.forEach((r, i) => {
+        const id = String(r.id || '');
+        if (!id) return;
+        if (!valid.has(id)) return;    // ما نخلي يحقن روم مو موجودة
+        const name = String(r.name || '').trim().slice(0, 80) || current.get(id)?.name || id;
+        next.push({ id, name, order: i + 1, enabled: r.enabled !== false });
+    });
+
+    db.rankConfig = next;
+    saveDb();
+    addLog('تعديل ترتيب الرتب', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: `${next.length} رتبة`, details: next.map(r => r.name).join(' ← ') });
+    refreshRegistry(true);
+    res.json({ ok: true, ranks: next });
+});
+
+/** يغيّر رتبة فرد — ويعدّلها فعلياً في الديسكورد */
+app.post('/api/officers/:id/rank', requireAuth, requireAdmin, async (req, res) => {
+    const id = req.params.id;
+    const rankRoleId = req.body?.rankRoleId ? String(req.body.rankRoleId) : null;
+    const reason = String(req.body?.reason || '').trim();
+
+    if (!client.isReady() || !guildRef) {
+        return res.status(503).json({ error: 'bot-offline', message: 'البوت مو متصل بالديسكورد' });
+    }
+
+    let member;
+    try { member = await guildRef.members.fetch(id); }
+    catch { return res.status(404).json({ error: 'not-found', message: 'ما قدرت أجيب العضو من الديسكورد' }); }
+
+    const oldRank = memberRankInfo(member);
+    const allRankRoles = detectRankRoles(guildRef).map(r => r.id);
+
+    if (rankRoleId && !allRankRoles.includes(rankRoleId)) {
+        return res.status(400).json({ error: 'bad-rank', message: 'الرتبة المختارة مو رتبة معروفة' });
+    }
+
+    try {
+        const remove = allRankRoles.filter(rid => rid !== rankRoleId && member.roles.cache.has(rid));
+        if (remove.length) {
+            await member.roles.remove(remove, `تغيير رتبة من نظام إدارة الشرطة${reason ? ' — ' + reason : ''}`);
+        }
+        if (rankRoleId && !member.roles.cache.has(rankRoleId)) {
+            await member.roles.add(rankRoleId, `ترقية من نظام إدارة الشرطة${reason ? ' — ' + reason : ''}`);
+        }
+    } catch (e) {
+        const msg = /higher|Missing Permissions|role/i.test(e.message)
+            ? 'البوت ما عنده صلاحية، أو رتبته بالسيرفر أقل من الرتبة هذي. ارفع رتبة البوت فوق الرتب من إعدادات السيرفر.'
+            : e.message;
+        return res.status(400).json({ error: 'discord-fail', message: msg });
+    }
+
+    const newCfg = rankConfigList().find(r => r.id === rankRoleId);
+    const newName = newCfg ? newCfg.name : '—';
+    const st = officerStore(id);
+    st.customRank = null;   // الرتبة صارت من الديسكورد
+    addHistory(id, {
+        type: 'promote', icon: 'fa-user-shield',
+        title: `تغيير رتبة من الموقع: ${oldRank ? oldRank.name : '—'} ← ${newName}`,
+        detail: reason || 'بدون سبب محدد',
+        by: req.account.charName || req.account.username
+    });
+    addLog('تغيير رتبة', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: `${member.displayName} (${id})`, details: `${oldRank ? oldRank.name : '—'} ← ${newName}${reason ? ' • ' + reason : ''}` });
+
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, from: oldRank ? oldRank.name : null, to: newName });
+});
+
 /* --- التسجيل (مرة واحدة) --- */
 app.post('/api/auth/register', async (req, res) => {
     const ip = clientIp(req);
@@ -1165,6 +1661,10 @@ app.get('/api/officers/:id', requireAuth, (req, res) => {
         ok: true,
         officer: { ...off, reports: st.reports || [] },
         timeline: timeline.slice(0, 120),
+        pointsLog: (st.pointsLog || []).slice(0, 60),
+        promotions: (st.promotions || []).slice(0, 40),
+        strikeCount: st.strikeCount || 0,
+        lastStrikeAt: st.lastStrikeAt || null,
         account: account ? publicAccount(account) : null
     });
 });
@@ -1432,11 +1932,16 @@ client.on('ready', async () => {
         console.log(`[السيرفر المستخدم] ${guildRef.name} — ${guildRef.id} (${guildRef.memberCount} عضو)`);
     }
 
+    // الرتب تنقرأ من الرومات أول ما يشتغل
+    const ranks = syncRankConfig(guildRef);
+    console.log(`[الرتب] ${ranks.length} رتبة مكتشفة: ${ranks.map(r => r.name).join(' ← ')}`);
+
     refreshRegistry(true).then(async () => {
         // عمليات طويلة في الخلفية — الموقع يبقى شغّال طول هالفترة
         try { await syncJoinDates(guildRef); } catch (e) { console.warn('join-dates:', e.message); }
         try { await syncHours(); } catch (e) { console.warn('hours:', e.message); }
         try { await syncReports(); } catch (e) { console.warn('reports:', e.message); }
+        try { await syncSanctions(); } catch (e) { console.warn('sanctions:', e.message); }
         try { await sweepAuditLogs(guildRef); } catch (e) { console.warn('audit:', e.message); }
         await refreshRegistry(true);
         io.emit('accounts:update', accountsPublicList());
@@ -1525,6 +2030,17 @@ client.on('messageCreate', async (message) => {
         });
         saveDb();
         refreshRegistry(true);
+    }
+
+    // ============ رومات الخصم / النقاط / الترقيات ============
+    if (CONFIG.strikeChannels.includes(message.channel.id)) {
+        try { handleStrikeMessage(message); } catch (e) { console.warn('strike:', e.message); }
+    }
+    if (CONFIG.pointsChannels.includes(message.channel.id)) {
+        try { handlePointsMessage(message); } catch (e) { console.warn('points:', e.message); }
+    }
+    if (CONFIG.promotionChannels.includes(message.channel.id)) {
+        try { handlePromotionMessage(message); } catch (e) { console.warn('promotion:', e.message); }
     }
 });
 

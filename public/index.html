@@ -189,6 +189,9 @@
                 <button class="tab" data-v="online">
                     <i class="fa-solid fa-users-viewfinder"></i> المتواجدون بالموقع <span class="c" id="cOnline">0</span>
                 </button>
+                <button class="tab" data-v="ranks" id="tabRanks" style="display:none">
+                    <i class="fa-solid fa-layer-group"></i> الرتب
+                </button>
                 <button class="tab" data-v="accounts">
                     <i class="fa-solid fa-user-shield"></i> حسابات الموقع <span class="c" id="cAccounts">0</span>
                 </button>
@@ -366,6 +369,27 @@
                 </div>
             </section>
 
+            <!-- ============ الرتب ============ -->
+            <section class="panel hide" id="v-ranks">
+                <div class="panel-h">
+                    <div>
+                        <h2>ترتيب الرتب</h2>
+                        <div class="sub">الأعلى بالأعلى — تحكم بالترتيب وتغيير أي رتبة من جدول الأفراد</div>
+                    </div>
+                    <div class="sp"></div>
+                    <button class="btn btn-gold btn-sm" id="btnSaveRanks">
+                        <i class="fa-solid fa-floppy-disk"></i> حفظ الترتيب
+                    </button>
+                </div>
+                <div class="mo-b" style="padding:16px 20px">
+                    <div class="msg msg-info" style="margin:0 0 14px">
+                        <i class="fa-solid fa-circle-info"></i>
+                        <span>الترتيب من الأعلى للأدنى. من عندك رتبة في الديسكورد ما ظهرت؟ راجع اسم الرتبة، أو اعمل Refresh. والرتبة اللي تختارها في جدول قسم الشؤون تنحط مباشرة بالديسكورد.</span>
+                    </div>
+                    <div id="rankList"></div>
+                </div>
+            </section>
+
             <!-- ============ السجل ============ -->
             <section class="panel hide" id="v-logs">
                 <div class="panel-h">
@@ -469,9 +493,11 @@
                     <input id="edLeaveUntil" type="date">
                 </div>
                 <div class="field">
-                    <label><i class="fa-solid fa-id-badge"></i>رتبة معروضة مخصّصة (فاضي = رتبة الديسكورد)</label>
-                    <input id="edRank" list="rankList" placeholder="مثال: رقيب">
-                    <datalist id="rankList"></datalist>
+                    <label><i class="fa-solid fa-shield-halved"></i>الرتبة (تتعدل بالديسكورد)</label>
+                    <select id="edRankRole">
+                        <option value="">— بدون تغيير —</option>
+                    </select>
+                    <div class="hint" id="edRankHint">تغيير الرتبة من هنا يشيل رتبته القديمة ويضيف الجديدة فعلياً بالديسكورد.</div>
                 </div>
                 <div class="field">
                     <label><i class="fa-solid fa-note-sticky"></i>ملاحظات الجرد</label>
