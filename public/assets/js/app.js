@@ -18,7 +18,9 @@ const S = {
     certDefs: {},   // تعبّأ من السيرفر عبر /api/meta
     botOnline: false,
     guildName: null,
-    ranks: []       // رتبةرتب الديسكورد بالترتيب اللي حدده المشرف
+    ranks: [],      // رتبة رتب الديسكورد بالترتيب اللي حدده المشرف
+    duties: [],     // المسؤوليات
+    allRoles: []    // كل الأدوار (رتبة/شهادة/مسؤولية)
 };
 
 /* ------------------------------ أدوات ------------------------------ */
@@ -312,6 +314,21 @@ function setLive(on) {
 }
 setInterval(() => { if (S.token && socket.connected) socket.emit('ping:site'); }, 25000);
 
+// شبكة أمان: لو ضاعت رسالة من السوكيت، نجدّد البيانات كل فترة
+let lastOfficersAt = 0;
+setInterval(async () => {
+    if (!S.token || !S.account || document.hidden) return;
+    if (Date.now() - lastOfficersAt < 45000) return;
+    lastOfficersAt = Date.now();
+    try {
+        const r = await api('/api/officers');
+        if (r.officers && JSON.stringify(r.officers) !== JSON.stringify(S.officers)) {
+            S.officers = r.officers;
+            renderAll();
+        }
+    } catch { }
+}, 50000);
+
 qa('#tabs .tab').forEach(t => t.addEventListener('click', () => {
     S.view = t.dataset.v;
     qa('#tabs .tab').forEach(x => x.classList.toggle('on', x === t));
@@ -356,6 +373,15 @@ function fillRankFilters() {
 }
 
 /* ------------------------------ الإحصاء ------------------------------ */
+/** أعلى رتبة حالية — ومن يحملها */
+function topRank() {
+    const withRank = S.officers.filter(o => o.rank && o.rank !== '—' && o.rankLevel < 9999);
+    if (!withRank.length) return null;
+    const best = withRank.reduce((a, b) => (b.rankLevel < a.rankLevel ? b : a));
+    const holders = withRank.filter(o => o.rankLevel === best.rankLevel);
+    return { name: best.rank, level: best.rankLevel, holders, count: holders.length };
+}
+
 function renderStats() {
     const all = S.officers;
     $('sOfficers').textContent = arabicNum(all.length);
@@ -363,6 +389,14 @@ function renderStats() {
     $('sHours').textContent = arabicNum(all.reduce((a, o) => a + (+o.hours || 0), 0).toFixed(1));
     $('sPoints').textContent = arabicNum(all.reduce((a, o) => a + (+o.points || 0), 0));
     $('sReports').textContent = arabicNum(all.reduce((a, o) => a + (+o.reportsCount || 0), 0));
+
+    const top = topRank();
+    S.topLevel = top ? top.level : null;
+    $('cardTopRank').style.display = top ? '' : 'none';
+    if (top) {
+        $('sTopRank').textContent = top.name;
+        $('sTopHolders').textContent = arabicNum(top.count);
+    }
 
     const on = S.presence.filter(p => p.online).length;
     $('sOnline').textContent = arabicNum(on);
@@ -408,6 +442,7 @@ bindSearch('srchAffairs', renderAffairs);
 bindSearch('srchAcademy', renderAcademy);
 bindSearch('srchOnline', renderOnline);
 bindSearch('srchAcc', renderAccounts);
+bindSearch('srchRoles', () => renderRanks(S.allRoles || []));
 
 /* ------------------------------ خلايا مشتركة ------------------------------ */
 function certChips(list, limit = 6) {
@@ -447,6 +482,16 @@ function rankTag(o) {
     return o.isCadet ? t + ' <span class="tag cadet"><i class="fa-solid fa-graduation-cap"></i> أكاديمية</span>' : t;
 }
 
+/** شارات المسؤوليات — أي روم غير رتبة ولا شهادة */
+function dutyChips(list) {
+    const ds = list || [];
+    if (!ds.length) return '<span class="tag mute">—</span>';
+    const show = ds.slice(0, 3).map(d =>
+        `<span class="tag" style="background:var(--vio-bg);color:#c4b5fd;border-color:rgba(167,139,250,.28)" title="${esc(d.name)}">${esc(d.name)}</span>`).join(' ');
+    const rest = ds.length - 3;
+    return show + (rest > 0 ? ` <span class="tag mute" title="${ds.slice(3).map(d => d.name).join('، ')}">+${rest}</span>` : '');
+}
+
 /** قائمة اختيار الرتبة — تظهر للمشرف داخل الجدول */
 function rankSelect(o) {
     if (!S.isAdmin || !S.ranks.length) return rankTag(o);
@@ -455,6 +500,12 @@ function rankSelect(o) {
     return `<select class="sel ranksel" data-officer="${esc(o.id)}" title="غيّر الرتبة من هنا — تتعدل بالديسكورد">
         <option value="">— بدون رتبة —</option>${opts}
     </select>${o.rankIsCustom ? ' <span class="tag rank" title="رتبة مخصّصة من الموقع"><i class="fa-solid fa-pen"></i></span>' : ''}`;
+}
+
+/** تاج أعلى رتبة */
+function topCrown(o) {
+    if (S.topLevel === null || o.rankLevel !== S.topLevel || o.rank === '—') return '';
+    return `<span class="crown" title="أعلى رتبة بالشرطة"><i class="fa-solid fa-crown"></i></span>`;
 }
 function emptyRow(cols, ic, title, sub) {
     return `<tr><td colspan="${cols}"><div class="empty"><i class="fa-solid ${ic}"></i><b>${esc(title)}</b>${sub ? `<span>${esc(sub)}</span>` : ''}</div></td></tr>`;
@@ -496,8 +547,8 @@ function renderAffairs() {
         ? `جميع أفراد الشرطة — ${S.officers.length}`
         : `مفلتر: ${list.length} من ${S.officers.length}`;
 
-    if (!S.officers.length) { tb.innerHTML = noDataRow(9); return; }
-    if (!list.length) { tb.innerHTML = emptyRow(9, 'fa-magnifying-glass', 'ما فيه نتائج', 'جرّب كلمة ثانية'); return; }
+    if (!S.officers.length) { tb.innerHTML = noDataRow(10); return; }
+    if (!list.length) { tb.innerHTML = emptyRow(10, 'fa-magnifying-glass', 'ما فيه نتائج', 'جرّب كلمة ثانية'); return; }
 
     tb.innerHTML = list.map(o => `
     <tr>
@@ -514,7 +565,7 @@ function renderAffairs() {
                 </div>
             </div>
         </td>
-        <td>${rankSelect(o)}</td>
+        <td>${topCrown(o)} ${rankSelect(o)}</td>
         <td>
             <div class="num">${esc(fmtDT(o.joinTs))}</div>
             <div style="font-size:10.5px;color:var(--tx-3)">${arabicNum(o.daysInService)} يوم بالخدمة</div>
@@ -522,6 +573,7 @@ function renderAffairs() {
         <td class="num-c"><span class="pill num">${arabicNum((+o.hours || 0).toFixed(1))}<u>س</u></span></td>
         <td class="num-c">${pointsCell(o)}</td>
         <td>${certChips(o.certifications)}</td>
+        <td>${dutyChips(o.duties)}</td>
         <td class="num-c">
             <button class="pill num" style="cursor:pointer;border:1px solid var(--line-2)" onclick="openProfile('${o.id}')">
                 <i class="fa-solid fa-file-lines" style="font-size:10px"></i>${arabicNum(o.reportsCount)}
@@ -553,8 +605,8 @@ function renderAcademy() {
     }[sort];
     list = list.slice().sort(cmp);
 
-    if (!S.officers.length) { tb.innerHTML = noDataRow(9); return; }
-    if (!list.length) { tb.innerHTML = emptyRow(9, 'fa-graduation-cap', 'ما فيه كاديت', 'ما فيه أحد برتبة كاديت أو سولو كاديت'); return; }
+    if (!S.officers.length) { tb.innerHTML = noDataRow(10); return; }
+    if (!list.length) { tb.innerHTML = emptyRow(10, 'fa-graduation-cap', 'ما فيه كاديت', 'ما فيه أحد برتبة كاديت أو سولو كاديت'); return; }
 
     tb.innerHTML = list.map(o => `
     <tr>
@@ -570,11 +622,12 @@ function renderAcademy() {
                 </div>
             </div>
         </td>
-        <td>${rankSelect(o)}</td>
+        <td>${topCrown(o)} ${rankSelect(o)}</td>
         <td class="num">${esc(fmtDT(o.joinTs))}</td>
         <td class="num-c"><span class="pill num">${arabicNum((+o.hours || 0).toFixed(1))}<u>س</u></span></td>
         <td class="num-c">${pointsCell(o)}</td>
         <td>${certChips(o.certifications)}</td>
+        <td>${dutyChips(o.duties)}</td>
         <td class="num-c">
             <button class="pill num" style="cursor:pointer;border:1px solid var(--line-2)" onclick="openProfile('${o.id}')">
                 <i class="fa-solid fa-file-lines" style="font-size:10px"></i>${arabicNum(o.reportsCount)}
@@ -600,26 +653,26 @@ document.addEventListener('change', async (e) => {
     const newName = newId ? (S.ranks.find(r => r.id === newId)?.name || '?') : 'بدون رتبة';
     const o = S.officers.find(x => x.id === id);
     if (!o) return;
-    if (newName === o.rank) return;
+
+    const revert = () => { sel.value = o.rankRoleId || ''; sel.disabled = false; };
+    if (newName === o.rank) return revert();
 
     const reason = prompt(
-        `تغيير رتبة ${o.name}\nمن: ${o.rank}\nإلى: ${newName}\n\nاكتب السبب (بيتسجل بالبروفايل وسجل العمليات):`,
+        `تغيير رتبة ${o.name}\nمن: ${o.rank}\nإلى: ${newName}\n\nاكتب السبب (بيتسجل بالبروفايل). لو تبي بدون سبب اكتب نقطة:`,
         'ترقية');
-    if (reason === null) { sel.value = o.rankRoleId || ''; return; }
+    if (reason === null) return revert();
 
     sel.disabled = true;
     try {
         const r = await api(`/api/officers/${id}/rank`, { method: 'POST', body: { rankRoleId: newId || null, reason } });
-        toast(`تم — ${r.from || '—'} ← ${r.to}`, 'ok', 4200);
+        toast(`تم بالنت — ${r.from || '—'} ← ${r.to}`, 'ok', 4000);
         const fresh = await api('/api/officers');
         S.officers = fresh.officers || [];
         renderAffairs(); renderAcademy(); renderStats();
         if (S.isAdmin) loadLogs();
     } catch (err) {
-        toast(err.message, 'err', 6500);
-        sel.value = o.rankRoleId || '';
-    } finally {
-        sel.disabled = false;
+        toast(err.message, 'err', 8000);
+        revert();
     }
 });
 
@@ -741,12 +794,20 @@ async function accReset(id) {
     catch (e) { toast(e.message, 'err'); }
 }
 
-/* ------------------------------ إدارة الرتب ------------------------------ */
+/* ------------------------------ إدارة الأدوار ------------------------------ */
+const ROLE_TYPES = {
+    rank: { label: 'رتبة', icon: 'fa-shield', color: 'var(--gold)' },
+    cert: { label: 'شهادة / قسم', icon: 'fa-award', color: 'var(--info)' },
+    duty: { label: 'مسؤولية', icon: 'fa-user-tie', color: 'var(--vio)' }
+};
+
 async function loadRanks() {
     try {
-        const d = await api('/api/ranks');
-        S.ranks = (d.ranks || []).filter(r => r.enabled !== false);
-        renderRanks(d.ranks || []);
+        const d = await api('/api/roles');
+        S.allRoles = d.roles || [];
+        S.ranks = S.allRoles.filter(r => r.type === 'rank' && r.enabled !== false);
+        S.duties = S.allRoles.filter(r => r.type === 'duty' && r.enabled !== false);
+        renderRanks(S.allRoles);
         $('tabRanks').classList.toggle('hide', !S.isAdmin);
         afterRanksLoaded();
     } catch { }
@@ -756,49 +817,68 @@ function renderRanks(list) {
     const box = $('rankList');
     if (!list.length) {
         box.innerHTML = `<div class="empty"><i class="fa-solid fa-layer-group"></i>
-            <b>ما لقيت رتب</b>
+            <b>ما لقيت أدوار</b>
             <span>تأكد إن البوت داخل سيرفر الشرطة وعنده صلاحية View Server، وبعدين Refresh</span></div>`;
         return;
     }
-    const max = Math.max(...list.map(r => (r.order ?? 0)), list.length);
-    box.innerHTML = list.map((r, i) => {
-        const count = S.officers.filter(o => o.rankRoleId === r.id).length;
+    const q = $('srchRoles').querySelector('input').value || '';
+
+    const groups = { rank: [], cert: [], duty: [] };
+    list.forEach(r => { (groups[r.type] ||= []).push(r); });
+
+    const html = ['rank', 'cert', 'duty'].map(type => {
+        let items = groups[type] || [];
+        if (q) items = items.filter(r => fold(r.name).includes(fold(q)));
+        if (!items.length) return '';
+        const meta = ROLE_TYPES[type];
         return `
-        <div class="certcard" data-rank="${esc(r.id)}" style="${r.enabled === false ? 'opacity:.45' : ''}">
-            <div class="ic" style="background:var(--gold-glow);color:var(--gold);border:1px solid var(--line)">
-                <i class="fa-solid fa-shield"></i>
-            </div>
-            <div style="flex:1;min-width:0">
-                <b>${esc(r.name)}</b>
-                <div class="m">
-                    ${count ? `<b>${arabicNum(count)}</b> فرد` : 'ما فيه أحد'}
-                    ${r.missing ? ' • <span style="color:var(--bad)">محذوفة من الديسكورد</span>' : ''}
-                    <span class="mono" style="opacity:.6;margin-inline-start:6px">${esc(r.id)}</span>
-                </div>
-            </div>
-            <div class="rowacts" style="justify-content:flex-end">
-                <button class="iconbtn" data-mv="-1" title="ارفع لفوق" ${i === 0 ? 'disabled' : ''}><i class="fa-solid fa-arrow-up"></i></button>
-                <button class="iconbtn" data-mv="1" title="أنزل لتحت" ${i === list.length - 1 ? 'disabled' : ''}><i class="fa-solid fa-arrow-down"></i></button>
-                <button class="iconbtn" data-rename title="غيّر الاسم"><i class="fa-solid fa-pen"></i></button>
-                <button class="iconbtn b" data-toggle title="${r.enabled === false ? 'فعّل' : 'أخفيه من الجدول'}">
-                    <i class="fa-solid fa-${r.enabled === false ? 'eye-slash' : 'eye'}"></i>
-                </button>
-            </div>
-        </div>`;
+        <div class="sec-t" style="margin-top:22px">
+            <i class="fa-solid ${meta.icon}" style="color:${meta.color}"></i>
+            ${meta.label}<span>${arabicNum(items.length)}</span>
+        </div>
+        <div data-group="${type}">${items.map(r => rankRow(r, type)).join('')}</div>`;
     }).join('');
+
+    box.innerHTML = html || '<div class="empty"><i class="fa-solid fa-magnifying-glass"></i><b>ما فيه نتائج</b></div>';
 }
 
-/* أزرار تحريك الرتب + الحفظ */
+function rankRow(r, type) {
+    const count = type === 'rank'
+        ? S.officers.filter(o => o.rankRoleId === r.id).length
+        : (r.members || 0);
+    return `
+    <div class="certcard" data-rank="${esc(r.id)}" data-type="${type}" style="${r.enabled === false ? 'opacity:.45' : ''}">
+        <div class="ic" style="background:${ROLE_TYPES[type].color}22;color:${ROLE_TYPES[type].color};border:1px solid ${ROLE_TYPES[type].color}44">
+            <i class="fa-solid ${ROLE_TYPES[type].icon}"></i>
+        </div>
+        <div style="flex:1;min-width:0">
+            <b>${esc(r.name)}</b>
+            <div class="m">
+                ${count ? `<b>${arabicNum(count)}</b> ${type === 'rank' ? 'فرد' : 'عضو'}` : 'ما فيه أحد'}
+                ${r.missing ? ' • <span style="color:var(--bad)">محذوف من الديسكورد</span>' : ''}
+                <span class="mono" style="opacity:.55;margin-inline-start:6px">${esc(r.id)}</span>
+            </div>
+        </div>
+        <div class="rowacts" style="justify-content:flex-end">
+            <button class="iconbtn" data-mv="-1" title="ارفع"><i class="fa-solid fa-arrow-up"></i></button>
+            <button class="iconbtn" data-mv="1" title="أنزل"><i class="fa-solid fa-arrow-down"></i></button>
+            <button class="iconbtn" data-rename title="غيّر الاسم"><i class="fa-solid fa-pen"></i></button>
+            <button class="iconbtn b" data-toggle title="${r.enabled === false ? 'فعّل' : 'أخفه'}">
+                <i class="fa-solid fa-${r.enabled === false ? 'eye-slash' : 'eye'}"></i>
+            </button>
+        </div>
+    </div>`;
+}
+
 $('rankList').addEventListener('click', (e) => {
     const card = e.target.closest('[data-rank]');
     if (!card) return;
-    const box = $('rankList');
 
     if (e.target.closest('[data-mv]')) {
         const dir = +e.target.closest('[data-mv]').dataset.mv;
         const sib = dir < 0 ? card.previousElementSibling : card.nextElementSibling;
         if (!sib || !sib.dataset.rank) return;
-        if (dir < 0) box.insertBefore(card, sib); else box.insertBefore(sib, card);
+        if (dir < 0) card.parentNode.insertBefore(card, sib); else card.parentNode.insertBefore(sib, card);
         card.animate([{ transform: 'scale(.97)' }, { transform: 'scale(1)' }], { duration: 160 });
         return;
     }
@@ -810,34 +890,59 @@ $('rankList').addEventListener('click', (e) => {
         return;
     }
     if (e.target.closest('[data-toggle]')) {
-        card.style.opacity = card.style.opacity === '.45' ? '1' : '.45';
-        card.querySelector('[data-toggle] i').className =
-            `fa-solid fa-${card.style.opacity === '.45' ? 'eye-slash' : 'eye'}`;
+        const off = card.style.opacity !== '.45';
+        card.style.opacity = off ? '.45' : '1';
+        card.querySelector('[data-toggle] i').className = `fa-solid fa-${off ? 'eye-slash' : 'eye'}`;
     }
 });
 
-/* بعد تحميل الرتب: حدّث الفلاتر والقوائم */
-function afterRanksLoaded() {
-    fillRankSelects();
-    renderAffairs(); renderAcademy();
-}
-
 $('btnSaveRanks').addEventListener('click', async () => {
-    const rows = [...$('rankList').querySelectorAll('[data-rank]')].map((card, i) => ({
-        id: card.dataset.rank,
-        name: card.querySelector('b').textContent.trim(),
-        order: i + 1,
-        enabled: card.style.opacity !== '.45'
-    }));
-    if (!rows.length) return toast('ما فيه رتب', 'err');
+    const roles = [];
+    for (const grp of $('rankList').querySelectorAll('[data-group]')) {
+        grp.querySelectorAll('[data-rank]').forEach(card => {
+            roles.push({
+                id: card.dataset.rank,
+                type: card.dataset.type,
+                name: card.querySelector('b').textContent.trim(),
+                enabled: card.style.opacity !== '.45'
+            });
+        });
+    }
+    if (!roles.length) return toast('ما فيه أدوار', 'err');
     try {
-        await api('/api/ranks', { method: 'POST', body: { ranks: rows } });
-        toast('تم حفظ ترتيب الرتب ✓', 'ok');
+        await api('/api/roles', { method: 'POST', body: { roles } });
+        toast('تم حفظ الأدوار ✓', 'ok');
         await loadRanks();
         if (S.isAdmin) loadLogs();
     } catch (e) { toast(e.message, 'err'); }
 });
 
+function afterRanksLoaded() {
+    fillRankSelects();
+    renderAffairs(); renderAcademy();
+}
+
+/* --- إضافة رومات ما انكشفت تلقائياً (فاضية) --- */
+$('btnAddRoles').addEventListener('click', async () => {
+    const b = $('btnAddRoles');
+    b.disabled = true; b.innerHTML = '<span class="load"></span>';
+    try {
+        const d = await api('/api/roles/undetected');
+        if (!d.roles.length) { toast('ما فيه رومات جديدة', 'info'); return; }
+        const list = d.roles.map(r =>
+            `${arabicNum(r.members)} عضو — ${r.name} (${r.id})`).join('\n');
+        const pick = prompt(
+            `رومات موجودة بالديسكورد ما ظاهرة بالجدول.\n\nاكتب آيدي الروم اللي تبيها (تقدر تفصلهم بفاصلة، أو انسخ السطر كامل):\n\n${list}`,
+            d.roles[0].id);
+        if (pick === null) return;
+        const ids = pick.split(/[\s,]+/).filter(x => d.roles.some(r => r.id === x));
+        if (!ids.length) return toast('ما في آيدي صحيح', 'err');
+        const r = await api('/api/roles/add-duty', { method: 'POST', body: { ids } });
+        toast(`تمت إضافة ${arabicNum(r.added)} روم`, 'ok');
+        await loadRanks();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { b.disabled = false; b.innerHTML = '<i class="fa-solid fa-plus"></i> أضف روم من الديسكورد'; }
+});
 /* ------------------------------ السجل ------------------------------ */
 function renderLogs() {
     const tb = $('tbLogs');
@@ -873,6 +978,14 @@ function renderProfile(d) {
     const o = d.officer;
     const certs = o.certifications || [];
     const reps = o.reports || [];
+    const duties = o.duties || [];
+
+    const dutiesHtml = duties.length ? duties.map(x => `
+        <div class="certcard" style="border-color:rgba(167,139,250,.26);background:rgba(167,139,250,.05)">
+            <div class="ic" style="background:var(--vio-bg);color:var(--vio)"><i class="fa-solid fa-user-tie"></i></div>
+            <div><b>${esc(x.name)}</b></div>
+        </div>`).join('')
+        : '<div class="empty" style="padding:24px"><i class="fa-solid fa-user-tie"></i><b>ما فيه مسؤوليات</b></div>';
 
     const certsHtml = certs.length ? certs.map(c => `
         <div class="certcard">
@@ -964,6 +1077,7 @@ function renderProfile(d) {
             <div class="chips">
                 ${o.callsign ? `<span class="tag badge"><i class="fa-solid fa-id-badge"></i> ${esc(o.callsign)}</span>` : ''}
                 ${rankTag(o)}
+                ${topCrown(o)}
                 ${statusTag(o.status)}
                 ${o.isLSPD ? '<span class="tag ck"><i class="fa-solid fa-shield-halved"></i> LSPD</span>' : ''}
             </div>
@@ -1006,6 +1120,11 @@ function renderProfile(d) {
     <div class="sec-t"><i class="fa-solid fa-award"></i> الأقسام والشهادات <span>${arabicNum(certs.length)}</span></div>
     ${certsHtml}
 
+    <div class="sec-t"><i class="fa-solid fa-user-tie"></i> المسؤوليات
+        <span>${arabicNum(duties.length)}${S.isAdmin ? ' • <button class="btn btn-ghost btn-sm" onclick="openDuties(\'' + esc(o.id) + '\')"><i class="fa-solid fa-pen"></i> تعديل</button>' : ''}</span>
+    </div>
+    ${dutiesHtml}
+
     <div class="sec-t"><i class="fa-solid fa-timeline"></i> سجل الخدمة <span>${arabicNum(d.timeline.length)} حدث</span></div>
     <div class="tl">${tl}</div>
 
@@ -1039,6 +1158,7 @@ window.openEdit = function (id) {
     $('edLeaveUntil').value = o.leaveUntil ? String(o.leaveUntil).slice(0, 10) : '';
     $('edNotes').value = o.notes || '';
     $('edMsg').innerHTML = '';
+    $('edRecalc').style.display = S.isAdmin ? '' : 'none';
 
     // قائمة الرتب من رومات الديسكورد
     const rsel = $('edRankRole');
@@ -1054,6 +1174,23 @@ window.openEdit = function (id) {
 };
 $('edPoints').addEventListener('input', () => $('edPointsView').textContent = arabicNum($('edPoints').value || 0));
 $('edHours').addEventListener('input', () => $('edHoursView').textContent = arabicNum($('edHours').value || 0));
+
+$('edRecalc').addEventListener('click', async () => {
+    const id = $('edId').value;
+    if (!confirm('يعيد حساب النقاط من السجل ويلصّح التكرار. يكمل؟')) return;
+    const b = $('edRecalc');
+    b.disabled = true; b.innerHTML = '<span class="load"></span>';
+    try {
+        const r = await api(`/api/officers/${id}/recalc`, { method: 'POST' });
+        toast(`تم — الرصيد ${arabicNum(r.points)} (شال ${arabicNum(r.removed)} حركة مكررة)`, 'ok', 5000);
+        closeOv('ovEdit');
+        const fresh = await api('/api/officers');
+        S.officers = fresh.officers || [];
+        renderAll();
+        if (S.isAdmin) loadLogs();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { b.disabled = false; b.innerHTML = '<i class="fa-solid fa-rotate"></i> إعادة حساب النقاط من السجل'; }
+});
 
 $('edSave').addEventListener('click', async () => {
     const id = $('edId').value;
@@ -1095,6 +1232,75 @@ $('edSave').addEventListener('click', async () => {
         if (S.isAdmin) loadLogs();
     } catch (e) {
         showMsg($('edMsg'), e.message, 'err');
+    } finally {
+        btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ';
+    }
+});
+
+/* ------------------------------ تحرير المسؤوليات ------------------------------ */
+let dutyState = { officerId: null, add: [], remove: [] };
+
+window.openDuties = function (id) {
+    const o = S.officers.find(x => x.id === id);
+    if (!o) return;
+    if (!S.duties.length) return toast('ما فيه مسؤوليات مكتشفة — شوف تبويب "الأدوار والمسؤوليات"', 'info', 4500);
+    dutyState = { officerId: id, add: [], remove: [] };
+    $('duSub').textContent = `${o.name} — ${o.rank}`;
+    $('duMsg').innerHTML = '';
+    drawDuties();
+    openOv('ovDuties');
+};
+
+function drawDuties() {
+    const o = S.officers.find(x => x.id === dutyState.officerId);
+    if (!o) return;
+    const has = new Set((o.duties || []).map(d => d.roleId));
+    const willHave = new Set([...has].filter(r => !dutyState.remove.includes(r)));
+    dutyState.add.forEach(r => willHave.add(r));
+
+    $('duList').innerHTML = S.duties.map(d => {
+        const on = willHave.has(d.id);
+        const pending = dutyState.add.includes(d.id)
+            ? '<span class="tag ok" style="font-size:10px">تُضاف</span>'
+            : (dutyState.remove.includes(d.id) ? '<span class="tag bad" style="font-size:10px">تُشال</span>' : '');
+        return `
+        <label class="sw" style="display:flex;align-items:center;gap:11px;padding:11px 13px;background:rgba(4,8,15,.4);border:1px solid var(--line-2);border-radius:var(--r);margin-bottom:8px;cursor:pointer">
+            <input type="checkbox" data-duty="${esc(d.id)}" ${on ? 'checked' : ''} style="width:17px;height:17px;accent-color:var(--vio)">
+            <span style="font-size:13.5px;font-weight:700;color:var(--tx)">${esc(d.name)}</span>
+            ${pending}
+        </label>`;
+    }).join('');
+}
+
+$('duList').addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-duty]');
+    if (!cb) return;
+    const id = cb.dataset.duty;
+    dutyState.add = dutyState.add.filter(x => x !== id);
+    dutyState.remove = dutyState.remove.filter(x => x !== id);
+    if (cb.checked) dutyState.add.push(id);
+    else dutyState.remove.push(id);
+    drawDuties();
+});
+
+$('duSave').addEventListener('click', async () => {
+    if (!dutyState.add.length && !dutyState.remove.length) { closeOv('ovDuties'); return; }
+    const reason = prompt('اكتب سبب التعديل (بيتسجل ببروفايل الفرد):', 'تعيين مسؤوليات') ?? 'تعيين مسؤوليات';
+    const btn = $('duSave');
+    btn.disabled = true; btn.innerHTML = '<span class="load"></span>';
+    try {
+        await api(`/api/officers/${dutyState.officerId}/roles`, {
+            method: 'POST',
+            body: { add: dutyState.add, remove: dutyState.remove, reason }
+        });
+        toast(`تم — أُضيفت ${dutyState.add.length} وشُالت ${dutyState.remove.length}`, 'ok');
+        closeOv('ovDuties');
+        closeOv('ovProfile');
+        const fresh = await api('/api/officers');
+        S.officers = fresh.officers || [];
+        renderAll();
+    } catch (e) {
+        showMsg($('duMsg'), e.message, 'err');
     } finally {
         btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ';
     }

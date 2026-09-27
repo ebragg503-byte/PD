@@ -140,6 +140,17 @@
 
             <!-- إحصاء -->
             <div class="stats" id="stats">
+                <div class="stat" id="cardTopRank" style="display:none">
+                    <div class="row">
+                        <div class="ic" style="background:linear-gradient(160deg,#f2dda6,#a9822c);color:#17130a">
+                            <i class="fa-solid fa-crown"></i>
+                        </div>
+                        <div style="min-width:0">
+                            <b id="sTopRank" style="font-size:16px">—</b>
+                            <span>أعلى رتبة • <span id="sTopHolders" class="num">0</span> فرد</span>
+                        </div>
+                    </div>
+                </div>
                 <div class="stat">
                     <div class="row">
                         <div class="ic" style="background:var(--gold-glow);color:var(--gold)"><i class="fa-solid fa-users"></i></div>
@@ -190,7 +201,7 @@
                     <i class="fa-solid fa-users-viewfinder"></i> المتواجدون بالموقع <span class="c" id="cOnline">0</span>
                 </button>
                 <button class="tab" data-v="ranks" id="tabRanks" style="display:none">
-                    <i class="fa-solid fa-layer-group"></i> الرتب
+                    <i class="fa-solid fa-layer-group"></i> الأدوار والمسؤوليات
                 </button>
                 <button class="tab" data-v="accounts">
                     <i class="fa-solid fa-user-shield"></i> حسابات الموقع <span class="c" id="cAccounts">0</span>
@@ -240,6 +251,7 @@
                                 <th class="num-c">الساعات</th>
                                 <th class="num-c">النقاط</th>
                                 <th>الأقسام والشهادات</th>
+                                <th>المسؤوليات</th>
                                 <th class="num-c">التقارير</th>
                                 <th>الحالة</th>
                                 <th class="num-c" style="width:96px">إجراءات</th>
@@ -282,6 +294,7 @@
                                 <th class="num-c">الساعات</th>
                                 <th class="num-c">النقاط</th>
                                 <th>الأقسام والشهادات</th>
+                                <th>المسؤوليات</th>
                                 <th class="num-c">التقارير</th>
                                 <th>الحالة</th>
                                 <th class="num-c" style="width:96px">إجراءات</th>
@@ -369,22 +382,33 @@
                 </div>
             </section>
 
-            <!-- ============ الرتب ============ -->
+            <!-- ============ الأدوار ============ -->
             <section class="panel hide" id="v-ranks">
                 <div class="panel-h">
                     <div>
-                        <h2>ترتيب الرتب</h2>
-                        <div class="sub">الأعلى بالأعلى — تحكم بالترتيب وتغيير أي رتبة من جدول الأفراد</div>
+                        <h2>الأدوار والمسؤوليات</h2>
+                        <div class="sub">رتبة فرد واحد + كل الأقسام والشهادات</div>
                     </div>
                     <div class="sp"></div>
+                    <div class="search" id="srchRoles">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="search" placeholder="ابحث بروم…">
+                        <button class="clr" type="button"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" id="btnAddRoles">
+                        <i class="fa-solid fa-plus"></i> أضف روم من الديسكورد
+                    </button>
                     <button class="btn btn-gold btn-sm" id="btnSaveRanks">
                         <i class="fa-solid fa-floppy-disk"></i> حفظ الترتيب
                     </button>
                 </div>
                 <div class="mo-b" style="padding:16px 20px">
-                    <div class="msg msg-info" style="margin:0 0 14px">
+                    <div class="msg msg-info" style="margin:0 0 16px">
                         <i class="fa-solid fa-circle-info"></i>
-                        <span>الترتيب من الأعلى للأدنى. من عندك رتبة في الديسكورد ما ظهرت؟ راجع اسم الرتبة، أو اعمل Refresh. والرتبة اللي تختارها في جدول قسم الشؤون تنحط مباشرة بالديسكورد.</span>
+                        <span>
+                            <b>رتبة</b> — فرد واحد يأخذ وحدة. <b>شهادة/قسم</b> — ممكن أكثر من وحدة.
+                            <b>مسؤولية</b> — أي روم ثاني (مثل رئيس الأكاديمية) وتقدر تعطيها أو تشيلها لفرد من بروفايله.
+                        </span>
                     </div>
                     <div id="rankList"></div>
                 </div>
@@ -469,6 +493,12 @@
                 <div class="field">
                     <label><i class="fa-solid fa-plus-minus"></i>أو عدّلها (زاد/نقص)</label>
                     <input id="edAddPoints" type="number" step="1" placeholder="مثال: +5 أو -3">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+                        <button class="btn btn-ghost btn-sm" id="edRecalc" style="display:none">
+                            <i class="fa-solid fa-rotate"></i> إعادة حساب النقاط من السجل
+                        </button>
+                        <span style="font-size:11px;color:var(--tx-3)">تصلّح الخصومات المكررة من قبل إعادة التشغيل.</span>
+                    </div>
                 </div>
                 <div class="field">
                     <label><i class="fa-solid fa-clock"></i>الساعات المعتمدة</label>
@@ -527,6 +557,31 @@
             <div class="mo-b" id="acBody"></div>
             <div class="mo-f" id="acFoot">
                 <button class="btn btn-ghost" data-close>إغلاق</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="ov" id="ovDuties">
+        <div class="mo">
+            <div class="mo-h">
+                <i class="fa-solid fa-user-tie" style="color:var(--vio)"></i>
+                <div>
+                    <h3>المسؤوليات</h3>
+                    <div class="sub" id="duSub">—</div>
+                </div>
+                <button class="iconbtn x" data-close><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="mo-b">
+                <div class="msg msg-info" style="margin:0 0 14px">
+                    <i class="fa-solid fa-circle-info"></i>
+                    <span>التغيير ينحط بالديسكورد مباشرة — يحتاج البوت صلاحية Manage Roles.</span>
+                </div>
+                <div id="duList"></div>
+                <div id="duMsg"></div>
+            </div>
+            <div class="mo-f">
+                <button class="btn btn-ghost" data-close>إلغاء</button>
+                <button class="btn btn-gold" id="duSave"><i class="fa-solid fa-floppy-disk"></i> حفظ</button>
             </div>
         </div>
     </div>
