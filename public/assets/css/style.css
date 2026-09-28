@@ -600,6 +600,48 @@ table.tbl { width: 100%; border-collapse: separate; border-spacing: 0; }
 /* نقطة الاسترايك بالخط الزمني */
 .tl-i.t-strike::before { border-color: var(--bad); box-shadow: 0 0 0 3px rgba(248, 113, 113, .14); }
 
+/* خلايا التعديل المباشر (التحكم الكامل) */
+.celledit {
+    width: 100%;
+    min-width: 70px;
+    padding: 6px 9px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--tx);
+    font-family: inherit;
+    font-size: 13px;
+    transition: .15s var(--ease);
+}
+.celledit:hover { border-color: var(--line-3); background: rgba(4, 8, 15, .4); }
+.celledit:focus {
+    outline: 0;
+    border-color: rgba(217, 180, 91, .55);
+    background: rgba(4, 8, 15, .8);
+    box-shadow: 0 0 0 3px var(--gold-glow);
+}
+.celledit::placeholder { color: #4a566d; }
+
+/* سجل النقاط المضغوط (صفوف صغيرة بدال المربعات الكبيرة) */
+.minilist { display: flex; flex-direction: column; gap: 3px; }
+.mlrow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(4, 8, 15, .45);
+    border: 1px solid var(--line-2);
+    font-size: 12px;
+}
+.mlrow i { font-size: 10px; }
+.mlrow b { font-size: 12.5px; font-weight: 800; }
+.mlr-reason {
+    flex: 1; min-width: 0;
+    color: var(--tx-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mlr-bal { color: var(--tx-3); font-size: 11px; min-width: 28px; text-align: left; }
+.mlr-date { color: var(--tx-3); font-size: 10.5px; min-width: 62px; text-align: left; }
+
 /* تاج أعلى رتبة */
 .crown {
     display: inline-grid;

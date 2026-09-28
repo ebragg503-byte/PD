@@ -177,6 +177,9 @@ function emptyDb() {
         logs: [],
         rankConfig: [],
         roleConfig: [],
+        customRows: [],      // صفوف يدوية (أشخاص مو بالديسكورد)
+        customSections: [],  // أقسام يحددها المشرف
+        orphanReports: [],
         settings: { editorRoles: [] },
         meta: { auditSweptAt: 0, reportsSweptAt: 0 }
     };
@@ -204,6 +207,9 @@ function loadDb() {
     if (!fresh.settings || typeof fresh.settings !== 'object') fresh.settings = { editorRoles: [] };
     if (!Array.isArray(fresh.settings.editorRoles)) fresh.settings.editorRoles = [];
     if (!Array.isArray(fresh.rankConfig)) fresh.rankConfig = [];
+    if (!Array.isArray(fresh.customRows)) fresh.customRows = [];
+    if (!Array.isArray(fresh.customSections)) fresh.customSections = [];
+    if (!Array.isArray(fresh.orphanReports)) fresh.orphanReports = [];
     if (!Array.isArray(fresh.roleConfig)) {
         // ترحيل: نحوّل الرتب القديمة إلى النظام الموحّد
         fresh.roleConfig = fresh.rankConfig.map((r, i) => ({ ...r, type: 'rank', order: r.order ?? (i + 1) }));
@@ -932,7 +938,7 @@ function handlePointsMessage(msg) {
     }
 }
 
-function handlePromotionMessage(msg) {
+async function handlePromotionMessage(msg) {
     if (msg.author.bot) return;
     const t = parseTemplate(msg);
     const targetId = resolveTarget(t, msg);
@@ -967,8 +973,36 @@ function handlePromotionMessage(msg) {
     let toRank = rankOf(toRaw);
 
     if (!fromRank || !toRank) {
-        const m = t.raw.match(/(?:^|\n)\s*from\s*:?\s*([^\n]+)[\s\S]*?\n?\s*to\s*:?\s*([^\n]+)/i);
-        if (m) { fromRank = fromRank || rankOf(m[1]); toRank = toRank || rankOf(m[2]); }
+        // بحث سطر بسطر — \s كان يطلع السطر ويخبط الحقل اللي بعده
+        const line = (label) => {
+            const re = new RegExp(`(?:^|\\n)[ \\t]*${label}[ \\t]*:?[ \\t]*([^\\n\\r]*)`, 'i');
+            const m = t.raw.match(re);
+            return m ? m[1] : '';
+        };
+        fromRank = fromRank || rankOf(line('from'));
+        toRank = toRank || rankOf(line('to'));
+    }
+
+    // القالب كان فاضي (ما كتبوا الرتب) — نستنتجها من روم العضو الفعلي
+    let inferred = false;
+    if (!fromRank || !toRank) {
+        inferred = true;
+        const member = client.isReady() && guildRef
+            ? await guildRef.members.fetch(targetId).catch(() => null)
+            : null;
+        if (member) {
+            const info = memberRankInfo(member);
+            const cur = info?.name || 'غير محدد';
+            // رتبته الحالية = "to" غالباً (بعد الترقية)
+            if (!toRank) toRank = cur;
+            if (!fromRank) {
+                // نبحث بآخر ترقية سابقة معروفة من السجل
+                const prev = (st.promotions || []).find(p => p.to === cur);
+                fromRank = prev ? prev.from : 'غير محدد';
+            }
+        }
+        if (!fromRank) fromRank = 'غير محدد';
+        if (!toRank) toRank = 'غير محدد';
     }
 
     const reason = clean(t.byKey(/reason|desc|description|سبب|وصف/));
@@ -984,6 +1018,7 @@ function handlePromotionMessage(msg) {
         at: msg.createdTimestamp,
         from: fromRank || 'غير محدد',
         to: toRank || 'غير محدد',
+        inferred: !!inferred,
         reason, by, byId,
         channelName: msg.channel.name || 'Promotion'
     });
@@ -1206,37 +1241,58 @@ async function syncJoinDates(guild) {
     saveDb();
 }
 
+/** يسجّل أي رسالة بروم التقارير — حتى بدون منشن (تنحفظ بسجل عام) */
+function handleReportMessage(msg) {
+    if (msg.author.bot) return;
+    const cid = msg.channel.id;
+    const channelName = msg.channel.name || cid;
+    const body = fullMessage(msg);
+    const msgId = String(msg.id);
+    const author = msg.author.id;
+    const authorName = msg.member?.displayName || msg.author.username;
+
+    // المنشن ← يروح للفرد
+    let targetId = extractMention(body, msg);
+    if (targetId) {
+        // لو المنشن روم، نطلع أول عضو عنده الروم
+        const rm = body.match(/<@&(\d{17,19})>/);
+        if (rm) targetId = null;
+    }
+    if (!targetId) targetId = null;
+
+    const at = msg.createdTimestamp;
+
+    if (targetId) {
+        const st = officerStore(targetId);
+        if (!st.reports) st.reports = [];
+        if (st.reports.some(r => r.msgId === msgId)) return;
+        st.reports.unshift({ msgId, channelId: cid, channelName, title: channelName, body, at, author, authorName });
+        if (st.reports.length > 150) st.reports.length = 150;
+        addHistory(targetId, { type: 'report', icon: 'fa-file-lines', title: `تقرير ${channelName}`, detail: body.slice(0, 140), by: authorName });
+    } else {
+        // بدون منشن — سجل عام تقدر تحذف منه
+        if (!Array.isArray(db.orphanReports)) db.orphanReports = [];
+        if (db.orphanReports.some(r => r.msgId === msgId)) return;
+        db.orphanReports.unshift({ msgId, channelId: cid, channelName, title: channelName, body, at, author, authorName });
+        if (db.orphanReports.length > 300) db.orphanReports.length = 300;
+    }
+    saveDb();
+    refreshRegistry(true);
+}
+
 async function syncReports() {
     if (!guildRef) return;
+    let n = 0;
     for (const cid of CONFIG.reportChannels) {
         const channel = await guildRef.channels.fetch(cid).catch(() => null);
         if (!channel || !channel.isTextBased()) continue;
-        const channelName = channel.name || cid;
         let lastId, count = 0;
         while (count < CONFIG.reportsScanLimit) {
             const opts = { limit: 100 };
             if (lastId) opts.before = lastId;
             const messages = await channel.messages.fetch(opts).catch(() => null);
             if (!messages || messages.size === 0) break;
-
-            for (const msg of messages.values()) {
-                if (msg.author.bot) continue;
-                const targetId = extractMention(fullMessage(msg), msg);
-                if (!targetId) continue;
-                const st = officerStore(targetId);
-                if (!st.reports) st.reports = [];
-                if (st.reports.some(r => r.msgId === msg.id)) continue;
-                st.reports.push({
-                    msgId: msg.id,
-                    channelId: cid,
-                    channelName,
-                    title: channelName,
-                    body: fullMessage(msg),
-                    at: msg.createdTimestamp,
-                    author: msg.author.id,
-                    authorName: msg.member?.displayName || msg.author.username
-                });
-            }
+            for (const msg of messages.values()) { try { handleReportMessage(msg); n++; } catch { } }
             count += messages.size;
             lastId = oldestId(messages);
             if (messages.size < 100 || !lastId) break;
@@ -1245,9 +1301,10 @@ async function syncReports() {
     for (const st of Object.values(db.officers)) {
         if (Array.isArray(st.reports)) {
             st.reports.sort((a, b) => (b.at || 0) - (a.at || 0));
-            if (st.reports.length > 120) st.reports.length = 120;
+            if (st.reports.length > 150) st.reports.length = 150;
         }
     }
+    if (!Array.isArray(db.orphanReports)) db.orphanReports = [];
     db.meta.reportsSweptAt = Date.now();
     saveDb();
 }
@@ -1312,14 +1369,15 @@ function buildOfficerRecord(member, now) {
     const days = joinTs ? Math.max(0, Math.floor((now - joinTs) / 86400000)) : 0;
 
     const status = st.disabled ? 'suspended' : (st.onLeave ? 'leave' : 'active');
-    const rankName = st.customRank || (rankInfo ? rankInfo.name : '—');
+    const rankName = st.displayRank || st.customRank || (rankInfo ? rankInfo.name : '—');
 
     // نحفظ قائمة الروم اللي عنده — منها نعرف لو يقدر يعدّل الموقع
     st.heldRoleIds = [...member.roles.cache.keys()].filter(id => id !== '0');
 
     return {
         id: member.id,
-        name: member.displayName || member.user.username,
+        name: st.displayName || member.displayName || member.user.username,
+        realName: member.displayName || member.user.username,
         username: member.user.username,
         tag: member.user.tag || member.user.username,
         avatar: member.user.displayAvatarURL({ extension: 'png', size: 128 }),
@@ -1387,12 +1445,56 @@ async function refreshRegistry(force = false) {
         if (!members) { isSyncing = false; return; }
 
         const now = Date.now();
+        const hidden = hiddenOfficers();
         const list = [];
         for (const member of members.values()) {
             if (member.user.bot) continue;
             rememberMember(member.id, member);
             if (!isMemberOfPolice(member)) continue;
+            if (hidden.has(member.id)) continue;      // مخفي بقرار المشرف
             list.push(buildOfficerRecord(member, now));
+        }
+        // صفوف يدوية (أشخاص مو بالديسكورد)
+        for (const row of (db.customRows || [])) {
+            list.push({
+                id: row.id,
+                isCustom: true,
+                name: row.name,
+                username: row.name,
+                tag: row.name,
+                avatar: null,
+                callsign: row.callsign || '',
+                charName: row.name,
+                oocName: '',
+                isLSPD: false,
+                rank: row.rank || '—',
+                rankRoleId: null,
+                rankLevel: 500 + (db.customSections || []).findIndex(s => s.id === row.sectionId),
+                rankIsCustom: true,
+                certifications: [],
+                certCount: 0,
+                duties: [],
+                dutyCount: 0,
+                hours: +row.hours || 0,
+                hoursManual: true,
+                hoursAuto: 0,
+                points: +row.points || 0,
+                strikeCount: 0,
+                lastStrikeAt: null,
+                lastPointsChange: null,
+                reportsCount: 0,
+                joinTs: row.createdAt || null,
+                daysInService: row.createdAt ? Math.max(0, Math.floor((now - row.createdAt) / 86400000)) : 0,
+                accountCreated: new Date(row.createdAt || now).toISOString(),
+                status: 'active',
+                onLeave: false,
+                leaveUntil: null,
+                notes: row.notes || '',
+                isCadet: false,
+                sectionId: row.sectionId || null,
+                sectionName: (db.customSections || []).find(s => s.id === row.sectionId)?.name || '',
+                reports: []
+            });
         }
         list.sort((a, b) => (a.rankLevel - b.rankLevel) || a.name.localeCompare(b.name, 'ar'));
 
@@ -1613,6 +1715,181 @@ function rateOk(key, max = 8, windowMs = 10 * 60 * 1000) {
     rec.count++;
     return rec.count <= max;
 }
+
+/* --- التحكم الكامل (صفوف وأقسام وتعديل أي نص) --- */
+
+/** يعرض الصفوف اليدوية والأقسام المخصصة */
+app.get('/api/custom', requireAuth, (req, res) => {
+    res.json({
+        ok: true,
+        rows: db.customRows || [],
+        sections: db.customSections || []
+    });
+});
+
+/** يحفظ صف يدوي (شخص مو بالديسكورد) */
+app.post('/api/custom/rows', requireAuth, requireEdit, async (req, res) => {
+    const b = req.body || {};
+    const id = b.id ? String(b.id) : 'c_' + newId();
+    const existing = (db.customRows || []).find(r => r.id === id);
+    const row = {
+        id,
+        name: String(b.name || existing?.name || 'بدون اسم').slice(0, 80),
+        callsign: String(b.callsign || existing?.callsign || '').slice(0, 24),
+        rank: String(b.rank || existing?.rank || '—').slice(0, 60),
+        points: Number.isFinite(+b.points) ? Math.max(0, Math.round(+b.points)) : (existing?.points || 0),
+        hours: +b.hours || existing?.hours || 0,
+        notes: String(b.notes ?? existing?.notes ?? '').slice(0, 1200),
+        sectionId: b.sectionId ?? existing?.sectionId ?? null,
+        copyId: String(b.copyId || existing?.copyId || '').trim(),
+        createdAt: existing?.createdAt || Date.now(),
+        updatedAt: Date.now()
+    };
+    if (existing) Object.assign(existing, row);
+    else { db.customRows = db.customRows || []; db.customRows.push(row); }
+    saveDb();
+    addLog(existing ? 'تعديل صف يدوي' : 'إضافة صف يدوي', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: row.name });
+    await refreshRegistry(true);
+    io.emit('custom:update', { rows: db.customRows, sections: db.customSections });
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, row });
+});
+
+/** يحذف صف يدوي */
+app.delete('/api/custom/rows/:id', requireAuth, requireEdit, async (req, res) => {
+    const before = (db.customRows || []).length;
+    db.customRows = (db.customRows || []).filter(r => r.id !== req.params.id);
+    const removed = before - db.customRows.length;
+    if (!removed) return res.status(404).json({ error: 'not-found' });
+    addLog('حذف صف يدوي', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: req.params.id });
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('custom:update', { rows: db.customRows, sections: db.customSections });
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true });
+});
+
+/** يحذف صف فرد حقيقي من الجدول (يزيله من العرض ويوقف تتبّعه) */
+app.delete('/api/officers/:id', requireAuth, requireAdmin, async (req, res) => {
+    const id = req.params.id;
+    const off = officersCache.find(o => o.id === id);
+    if (!off) return res.status(404).json({ error: 'not-found' });
+
+    if (hiddenOfficers().has(id)) {
+        db.hiddenOfficers = (db.hiddenOfficers || []).filter(x => String(x) !== id);
+    } else {
+        db.hiddenOfficers = [...hiddenOfficers(), id];
+    }
+    const nowHidden = db.hiddenOfficers.some(x => String(x) === id);
+    addLog(nowHidden ? 'إخفاء فرد من الجدول' : 'إرجاع فرد للجدول', {
+        by: req.account.charName || req.account.username, byCopyId: req.account.copyId,
+        target: `${off.name} (${id})`
+    });
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, hidden: nowHidden });
+});
+
+/** الأقسام المخصصة */
+app.post('/api/custom/sections', requireAuth, requireEdit, async (req, res) => {
+    const b = req.body || {};
+    const id = b.id ? String(b.id) : 's_' + newId();
+    const existing = (db.customSections || []).find(s => s.id === id);
+    const sec = {
+        id,
+        name: String(b.name || existing?.name || 'قسم جديد').slice(0, 60),
+        icon: String(b.icon || existing?.icon || 'fa-folder').slice(0, 40),
+        color: String(b.color || existing?.color || '#d9b45b').slice(0, 20),
+        order: Number.isFinite(+b.order) ? +b.order : (existing?.order ?? (db.customSections || []).length + 1)
+    };
+    if (existing) Object.assign(existing, sec);
+    else { db.customSections = db.customSections || []; db.customSections.push(sec); }
+    saveDb();
+    addLog(existing ? 'تعديل قسم' : 'إضافة قسم', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: sec.name });
+    await refreshRegistry(true);
+    io.emit('custom:update', { rows: db.customRows, sections: db.customSections });
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, section: sec });
+});
+
+app.delete('/api/custom/sections/:id', requireAuth, requireEdit, async (req, res) => {
+    db.customSections = (db.customSections || []).filter(s => s.id !== req.params.id);
+    for (const r of (db.customRows || [])) if (r.sectionId === req.params.id) r.sectionId = null;
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('custom:update', { rows: db.customRows, sections: db.customSections });
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true });
+});
+
+/** يعدّل أي نص/حقل عند فرد — اسم معروض، رتبة معروضة، ملاحظات، نقاط، ساعات */
+app.post('/api/officers/:id/fields', requireAuth, requireEdit, async (req, res) => {
+    const id = req.params.id;
+    const st = officerStore(id);
+    const b = req.body || {};
+    const changes = [];
+
+    if (b.displayName !== undefined) {
+        const v = String(b.displayName || '').slice(0, 80);
+        if (v !== (st.displayName || '')) { changes.push(`الاسم المعروض: ${st.displayName || '—'} ← ${v || '—'}`); st.displayName = v; }
+    }
+    if (b.displayRank !== undefined) {
+        const v = String(b.displayRank || '').slice(0, 60);
+        if (v !== (st.displayRank || '')) { changes.push(`الرتبة المعروضة: ${st.displayRank || '—'} ← ${v || '—'}`); st.displayRank = v; }
+    }
+    if (b.points !== undefined && b.points !== null && b.points !== '') {
+        const p = Math.max(0, Math.round(+b.points || 0));
+        if (p !== (st.points || 0)) { changes.push(`النقاط ${st.points || 0} ← ${p}`); st.points = p; }
+    }
+    if (b.hours !== undefined && b.hours !== null && b.hours !== '') {
+        const h = +b.hours;
+        if (Number.isFinite(h) && h !== (st.hours ?? null)) { changes.push(`الساعات ${st.hours ?? 'تلقائي'} ← ${h}`); st.hours = h; }
+    }
+    if (b.notes !== undefined) {
+        const v = String(b.notes || '').slice(0, 1200);
+        if (v !== (st.notes || '')) { changes.push('تحديث الملاحظات'); st.notes = v; }
+    }
+
+    if (!changes.length) return res.json({ ok: true, changed: 0 });
+
+    st.updatedAt = Date.now();
+    st.updatedBy = req.account.charName || req.account.username;
+    addHistory(id, { type: 'edit', icon: 'fa-pen-ruler', title: 'تعديل يدوي', detail: changes.join(' • '), by: st.updatedBy });
+    addLog('تعديل يدوي', { by: st.updatedBy, byCopyId: req.account.copyId, target: id, details: changes.join(' • ') });
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, changed: changes.length, changes });
+});
+
+/** قائمة مخفيين (لا تظهر بالجدول) */
+function hiddenOfficers() {
+    if (!Array.isArray(db.hiddenOfficers)) db.hiddenOfficers = [];
+    return new Set(db.hiddenOfficers.map(String));
+}
+
+/**رجّع فرد مخفي */
+app.post('/api/officers/:id/restore', requireAuth, requireAdmin, async (req, res) => {
+    const id = req.params.id;
+    const was = db.hiddenOfficers.some(x => String(x) === id);
+    if (!was) return res.status(404).json({ error: 'not-found', message: 'الفرد مو مخفي' });
+    db.hiddenOfficers = db.hiddenOfficers.filter(x => String(x) !== id);
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true });
+});
+
+/** كل المخفيين — عشان ترجّعهم */
+app.get('/api/officers-hidden', requireAuth, requireAdmin, (req, res) => {
+    const out = [];
+    for (const id of (db.hiddenOfficers || [])) {
+        const st = db.officers[id];
+        out.push({ id, name: st?.displayName || cachedName(id), rank: st?.displayRank || (st ? '—' : '—') });
+    }
+    res.json({ ok: true, hidden: out });
+});
 
 /* --- صلاحيات التعديل --- */
 
@@ -2034,6 +2311,20 @@ app.get('/api/officers/:id', requireAuth, (req, res) => {
     const off = officersCache.find(o => o.id === id);
     if (!off) return res.status(404).json({ error: 'not-found', message: 'الفرد غير موجود في الجدول' });
 
+    // صف يدوي — ما عنده سجل ديسكورد
+    if (off.isCustom) {
+        return res.json({
+            ok: true,
+            officer: off,
+            timeline: [],
+            pointsLog: [],
+            promotions: [],
+            strikeCount: 0,
+            lastStrikeAt: null,
+            account: null
+        });
+    }
+
     const st = officerStore(id);
     const account = findAccountByCopyId(id);
 
@@ -2142,8 +2433,78 @@ app.post('/api/officers/:id', requireAuth, requireEdit, async (req, res) => {
     res.json({ ok: true, changed: changes.length });
 });
 
+/** يعدّل نص ترقية (من/إلى/السبب) */
+app.post('/api/officers/:id/promotions/:msgId', requireAuth, requireEdit, (req, res) => {
+    const st = officerStore(req.params.id);
+    const p = (st.promotions || []).find(x => String(x.msgId) === String(req.params.msgId));
+    if (!p) return res.status(404).json({ error: 'not-found' });
+    const b = req.body || {};
+    if (b.from !== undefined) p.from = String(b.from || '').slice(0, 60) || 'غير محدد';
+    if (b.to !== undefined) p.to = String(b.to || '').slice(0, 60) || 'غير محدد';
+    if (b.reason !== undefined) p.reason = String(b.reason || '').slice(0, 400);
+    p.edited = true; p.inferred = false;
+    saveDb();
+    addHistory(req.params.id, { type: 'promote', icon: 'fa-pen', title: 'تعديل نص ترقية', detail: `${p.from} ← ${p.to}`, by: req.account.charName || req.account.username });
+    res.json({ ok: true, promotion: p });
+});
+
+/* --- التقارير: عرض وحذف --- */
+
+/** كل التقارير المسجّلة (منسوبة + عامة) */
+app.get('/api/reports', requireAuth, (req, res) => {
+    const rows = [];
+    for (const [id, st] of Object.entries(db.officers)) {
+        for (const r of (st.reports || [])) {
+            const off = officersCache.find(o => o.id === id);
+            rows.push({ ...r, officerId: id, officerName: off?.name || cachedName(id), orphan: false });
+        }
+    }
+    for (const r of (db.orphanReports || [])) {
+        rows.push({ ...r, officerId: null, officerName: 'بدون منشن', orphan: true });
+    }
+    rows.sort((a, b) => (b.at || 0) - (a.at || 0));
+    res.json({ ok: true, reports: rows.slice(0, 300), count: rows.length });
+});
+
+/** يحذف تقرير — من فرد أو من السجل العام */
+app.delete('/api/reports/:msgId', requireAuth, requireEdit, async (req, res) => {
+    const msgId = String(req.params.msgId);
+    let removed = 0;
+
+    for (const st of Object.values(db.officers)) {
+        if (!Array.isArray(st.reports)) continue;
+        const before = st.reports.length;
+        st.reports = st.reports.filter(r => String(r.msgId) !== msgId);
+        removed += before - st.reports.length;
+    }
+    if (Array.isArray(db.orphanReports)) {
+        const before = db.orphanReports.length;
+        db.orphanReports = db.orphanReports.filter(r => String(r.msgId) !== msgId);
+        removed += before - db.orphanReports.length;
+    }
+
+    if (!removed) return res.status(404).json({ error: 'not-found', message: 'التقرير مو موجود' });
+
+    addLog('حذف تقرير', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: msgId, details: `${removed} رسالة` });
+    saveDb();
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+    res.json({ ok: true, removed });
+});
+
+/** يحذف كل تقارير فرد */
+app.delete('/api/officers/:id/reports', requireAuth, requireEdit, async (req, res) => {
+    const st = officerStore(req.params.id);
+    const n = (st.reports || []).length;
+    st.reports = [];
+    addLog('حذف كل التقارير', { by: req.account.charName || req.account.username, byCopyId: req.account.copyId, target: req.params.id, details: `${n} تقرير` });
+    saveDb();
+    await refreshRegistry(true);
+    res.json({ ok: true, removed: n });
+});
+
 /** يعيد حساب النقاط من السجل — يلصّح الأرقام اللي تكررت بسبب إعادة التشغيل */
-app.post('/api/officers/:id/recalc', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/officers/:id/recalc', requireAuth, requireEdit, (req, res) => {
     const id = req.params.id;
     const st = officerStore(id);
     const log = st.pointsLog || [];
@@ -2432,24 +2793,7 @@ client.on('messageCreate', async (message) => {
 
     if (CONFIG.reportChannels.includes(message.channel.id)) {
         if (message.author.bot) return;
-        const targetId = extractMention(text, message);
-        if (!targetId) return;
-        const st = officerStore(targetId);
-        if (!st.reports.some(r => r.msgId === message.id)) {
-            st.reports.unshift({
-                msgId: message.id,
-                channelId: message.channel.id,
-                channelName: message.channel.name || message.channel.id,
-                title: message.channel.name || 'تقرير',
-                body: text,
-                at: message.createdTimestamp,
-                author: message.author.id,
-                authorName: message.member?.displayName || message.author.username
-            });
-            addHistory(targetId, { type: 'report', icon: 'fa-file-lines', title: `تقرير ${message.channel.name || 'MDT'}`, detail: text.slice(0, 140), by: message.member?.displayName || message.author.username });
-            saveDb();
-            refreshRegistry(true);
-        }
+        handleReportMessage(message);
     }
 
     if (CONFIG.hoursChannels.includes(message.channel.id)) {

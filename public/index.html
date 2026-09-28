@@ -203,6 +203,9 @@
                 <button class="tab" data-v="ranks" id="tabRanks" style="display:none">
                     <i class="fa-solid fa-layer-group"></i> الأدوار والمسؤوليات
                 </button>
+                <button class="tab" data-v="control" id="tabControl" style="display:none">
+                    <i class="fa-solid fa-pen-ruler"></i> التحكم الكامل
+                </button>
                 <button class="tab" data-v="perms" id="tabPerms" style="display:none">
                     <i class="fa-solid fa-user-shield"></i> صلاحيات التعديل
                 </button>
@@ -235,6 +238,9 @@
                         <option value="active">نشط</option>
                         <option value="leave">على إجازة</option>
                         <option value="suspended">موقوف</option>
+                    </select>
+                    <select class="sel" id="fSecA">
+                        <option value="">كل الأقسام</option>
                     </select>
                     <select class="sel" id="fSortA">
                         <option value="rank">ترتيب حسب الرتبة</option>
@@ -418,6 +424,63 @@
                 </div>
             </section>
 
+            <!-- ============ التحكم الكامل ============ -->
+            <section class="panel hide" id="v-control">
+                <div class="panel-h">
+                    <div>
+                        <h2>التحكم الكامل</h2>
+                        <div class="sub">عدّل أي نص • احذف أي صف • أضف أقسام وصفوف</div>
+                    </div>
+                    <div class="sp"></div>
+                    <div class="search" id="srchCtrl" style="max-width:260px">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="search" placeholder="دور على فرد…">
+                        <button class="clr" type="button"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                </div>
+
+                <div class="mo-b" style="padding:16px 20px">
+                    <div class="sec-t"><i class="fa-solid fa-table-list"></i> تعديل أي نص <span>اضغط على الخلية وراكتب</span></div>
+                    <div class="tbl-wrap" style="border:1px solid var(--line-2);border-radius:var(--r);overflow-x:auto">
+                        <table class="tbl" id="tblCtrl">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:180px">الاسم</th>
+                                    <th style="min-width:130px">الرتبة</th>
+                                    <th class="num-c" style="min-width:80px">نقاط</th>
+                                    <th class="num-c" style="min-width:80px">ساعات</th>
+                                    <th style="min-width:170px">ملاحظات</th>
+                                    <th class="num-c" style="width:120px">إجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbCtrl"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="sec-t" style="margin-top:26px"><i class="fa-solid fa-folder-plus"></i> الأقسام</div>
+                    <div id="ctrlSections" class="minilist" style="margin-bottom:12px"></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <input id="newSecName" placeholder="اسم القسم الجديد" style="flex:1;min-width:180px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <input id="newSecIcon" placeholder="الأيقونة (fa-star)" value="fa-folder" style="width:170px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <button class="btn btn-gold btn-sm" id="btnAddSection"><i class="fa-solid fa-plus"></i> إضافة قسم</button>
+                    </div>
+
+                    <div class="sec-t" style="margin-top:26px"><i class="fa-solid fa-user-plus"></i> صفوف يدوية <span>أشخاص مو بالديسكورد</span></div>
+                    <div id="ctrlRows" class="minilist" style="margin-bottom:12px"></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                        <input id="newRowName" placeholder="الاسم" style="flex:1;min-width:150px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <input id="newRowRank" placeholder="الرتبة" style="width:130px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <input id="newRowPoints" type="number" placeholder="نقاط" style="width:90px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <input id="newRowHours" type="number" step="0.5" placeholder="ساعات" style="width:90px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx);font-family:inherit;font-size:13.5px;outline:0">
+                        <select id="newRowSection" style="width:150px;padding:9px 12px;background:rgba(4,8,15,.55);border:1px solid var(--line-3);border-radius:10px;color:var(--tx-2);font-family:inherit;font-size:13px"></select>
+                        <button class="btn btn-gold btn-sm" id="btnAddRow"><i class="fa-solid fa-plus"></i> إضافة صف</button>
+                    </div>
+
+                    <div class="sec-t" style="margin-top:26px"><i class="fa-solid fa-eye-slash"></i> المخفيون من الجدول</div>
+                    <div id="ctrlHidden" class="minilist"></div>
+                </div>
+            </section>
+
             <!-- ============ الصلاحيات ============ -->
             <section class="panel hide" id="v-perms">
                 <div class="panel-h">
@@ -497,7 +560,7 @@
             </div>
             <div class="mo-f">
                 <button class="btn btn-ghost" data-close>إغلاق</button>
-                <button class="btn btn-gold" id="pfEdit"><i class="fa-solid fa-pen"></i> تعديل البيانات</button>
+                <button class="btn btn-gold" id="pfEdit"><i class="fa-solid fa-chart-simple"></i> تعديل الإحصائيات</button>
             </div>
         </div>
     </div>
@@ -506,9 +569,9 @@
     <div class="ov" id="ovEdit">
         <div class="mo">
             <div class="mo-h">
-                <i class="fa-solid fa-pen-to-square" style="color:var(--gold)"></i>
+                <i class="fa-solid fa-chart-simple" style="color:var(--gold)"></i>
                 <div>
-                    <h3>تعديل البيانات</h3>
+                    <h3>تعديل الإحصائيات</h3>
                     <div class="sub" id="edSub">—</div>
                 </div>
                 <button class="iconbtn x" data-close><i class="fa-solid fa-xmark"></i></button>
@@ -516,29 +579,12 @@
             <div class="mo-b">
                 <input type="hidden" id="edId">
 
-                <div class="fgrid" style="margin-bottom:18px">
-                    <div class="fcard gold">
-                        <u>النقاط</u><b class="num" id="edPointsView">0</b>
-                    </div>
-                    <div class="fcard">
-                        <u>الساعات</u><b class="num" id="edHoursView">0</b>
-                    </div>
+                <div class="field">
+                    <label><i class="fa-solid fa-star"></i>رصيد النقاط</label>
+                    <input id="edPoints" type="number" min="0" step="1" placeholder="0">
+                    <div class="hint" id="edPointsHint">—</div>
                 </div>
 
-                <div class="field">
-                    <label><i class="fa-solid fa-star"></i>النقاط — استبدل القيمة</label>
-                    <input id="edPoints" type="number" min="0" step="1" placeholder="مثال: 25">
-                </div>
-                <div class="field">
-                    <label><i class="fa-solid fa-plus-minus"></i>أو عدّلها (زاد/نقص)</label>
-                    <input id="edAddPoints" type="number" step="1" placeholder="مثال: +5 أو -3">
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
-                        <button class="btn btn-ghost btn-sm" id="edRecalc" style="display:none">
-                            <i class="fa-solid fa-rotate"></i> إعادة حساب النقاط من السجل
-                        </button>
-                        <span style="font-size:11px;color:var(--tx-3)">تصلّح الخصومات المكررة من قبل إعادة التشغيل.</span>
-                    </div>
-                </div>
                 <div class="field">
                     <label><i class="fa-solid fa-clock"></i>الساعات المعتمدة</label>
                     <input id="edHours" type="number" min="0" step="0.5" placeholder="اتركه فاضي = الساعات التلقائية">
@@ -571,6 +617,15 @@
                 <div class="field">
                     <label><i class="fa-solid fa-note-sticky"></i>ملاحظات الجرد</label>
                     <textarea id="edNotes" rows="3" placeholder="أي ملاحظة على الفرد…"></textarea>
+                </div>
+
+                <div class="sec-t" style="margin-top:20px"><i class="fa-solid fa-list-check"></i> حركة النقاط من الديسكورد</div>
+                <div id="edLog" class="minilist"></div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+                    <button class="btn btn-ghost btn-sm" id="edRecalc" style="display:none">
+                        <i class="fa-solid fa-rotate"></i> إعادة الحساب من السجل
+                    </button>
+                    <span style="font-size:11px;color:var(--tx-3)">يصلّح الخصومات المكررة من قبل إعادة التشغيل.</span>
                 </div>
 
                 <div id="edMsg"></div>
