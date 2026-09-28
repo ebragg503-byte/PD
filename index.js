@@ -869,20 +869,16 @@ function applyPoints(memberId, delta, { type, reason, by, byId, at, channelName,
     return { before, after: st.points, applied, requested: delta };
 }
 
-function handleStrikeMessage(msg) {
-    if (msg.author.bot) return;
-    const t = parseTemplate(msg);
+function handleStrikeMessage(msg, pre) {
+    const t = pre || parseTemplate(msg);
     const targetId = resolveTarget(t, msg);
     if (!targetId) { console.warn('[strike] ما لقيت الفرد بالرسالة', msg.id); return; }
 
     const st = officerStore(targetId);
     if ((st.pointsLog || []).some(x => x.msgId === msg.id)) return;   // مطبّق مسبقاً
 
-    let amount = saneNumber(t.byKey(/strike|strikes|deduct|punish|number|count|خصم/));
-    if (amount === null) {
-        const m = t.raw.match(/strike\s*:?\s*(\d+)/i);
-        amount = m ? parseInt(m[1], 10) : saneNumber(t.raw);
-    }
+    // الرقم من حقل "strike" حصراً — ما نقرا أي رقم ثاني (لحتى لو السبب فيه أرقام)
+    let amount = saneNumber(t.byKey(SANCTION_RE));
     if (amount === null || amount <= 0) amount = 1;
     amount = Math.min(Math.abs(amount), 100000);
 
@@ -904,20 +900,20 @@ function handleStrikeMessage(msg) {
     }
 }
 
-function handlePointsMessage(msg) {
-    if (msg.author.bot) return;
-    const t = parseTemplate(msg);
+function handlePointsMessage(msg, pre) {
+    const t = pre || parseTemplate(msg);
     const targetId = resolveTarget(t, msg);
     if (!targetId) { console.warn('[points] ما لقيت الفرد بالرسالة', msg.id); return; }
 
     const st = officerStore(targetId);
     if ((st.pointsLog || []).some(x => x.msgId === msg.id)) return;
 
-    const rawVal = t.byKey(/point|points|nadda|نقاط|score/) || t.raw;
+    // الرقم من حقل النقاط حصراً
+    const rawVal = t.byKey(POINTS_RE) || '';
     let amount = saneNumber(rawVal);
-    if (amount === null) { console.warn('[points] ما لقيت رقم', msg.id); return; }
+    if (amount === null) { console.warn('[points] ما لقيت رقم بحقل النقاط', msg.id); return; }
 
-    // إشارة السالب = خصم
+    // إشارة السالب = خصم (نفس الروم)
     if (/(^|[\s:>])-\s*\d/.test(String(rawVal))) amount = -Math.abs(amount);
     else amount = Math.abs(amount);
 
@@ -941,6 +937,16 @@ function handlePointsMessage(msg) {
 async function handlePromotionMessage(msg) {
     if (msg.author.bot) return;
     const t = parseTemplate(msg);
+    t.channelName = msg.channel.name || '';
+
+    // القالب فاضي (ما كتبوا من/إلى) = ما نقدر نخمّن
+    const hasFrom = !!t.byKey(/^from$/);
+    const hasTo = !!t.byKey(/^to$/);
+    if (!hasFrom && !hasTo) {
+        const r = handleSanctionMessage(msg);
+        return r?.unknown ? 'unknown' : 'skipped';
+    }
+
     const targetId = resolveTarget(t, msg);
     if (!targetId) { console.warn('[promotion] ما لقيت الفرد بالرسالة', msg.id); return; }
 
@@ -1054,45 +1060,55 @@ function explainRoleError(e) {
     return m;
 }
 
-/** يقرأ أرشيف الرومات الثلاثة أول ما يشتغل.
- *  مهم: نجمع كل الرسائل من الرومات الثلاث ونرتبها زمنياً قبل التطبيق —
- *  وإلا صار الرصيد حسب ترتيب الرومات مو حسب الوقت. */
+/** كل روم الجزاء مع بعض — البوت يقرأ النوع من المحتوى مو من رقم الروم */
+function sanctionChannelIds() {
+    return [...new Set([
+        ...CONFIG.strikeChannels,
+        ...CONFIG.pointsChannels,
+        ...CONFIG.promotionChannels
+    ])];
+}
+
+/** يقرأ أرشيف روم الجزاء. مهم: نجمع كل الرسائل ونرتبها زمنياً قبل التطبيق. */
 async function syncSanctions() {
     if (!guildRef) return;
-    const map = [
-        { ids: CONFIG.strikeChannels, type: 'strike', fn: handleStrikeMessage },
-        { ids: CONFIG.pointsChannels, type: 'points', fn: handlePointsMessage },
-        { ids: CONFIG.promotionChannels, type: 'promotion', fn: handlePromotionMessage }
-    ];
-
-    // 1) نجمع كل الرسائل
     const collected = [];
-    for (const entry of map) {
-        for (const cid of entry.ids) {
-            const channel = await guildRef.channels.fetch(cid).catch(() => null);
-            if (!channel || !channel.isTextBased()) continue;
-            let lastId, count = 0;
-            while (count < CONFIG.sanctionsScanLimit) {
-                const opts = { limit: 100 };
-                if (lastId) opts.before = lastId;
-                const messages = await channel.messages.fetch(opts).catch(() => null);
-                if (!messages || messages.size === 0) break;
-                for (const m of byOldest(messages)) collected.push({ m, type: entry.type, fn: entry.fn });
-                count += messages.size;
-                lastId = oldestId(messages);
-                if (messages.size < 100 || !lastId) break;
-            }
+
+    for (const cid of sanctionChannelIds()) {
+        const channel = await guildRef.channels.fetch(cid).catch(() => null);
+        if (!channel || !channel.isTextBased()) continue;
+        let lastId, count = 0;
+        while (count < CONFIG.sanctionsScanLimit) {
+            const opts = { limit: 100 };
+            if (lastId) opts.before = lastId;
+            const messages = await channel.messages.fetch(opts).catch(() => null);
+            if (!messages || messages.size === 0) break;
+            for (const m of byOldest(messages)) collected.push(m);
+            count += messages.size;
+            lastId = oldestId(messages);
+            if (messages.size < 100 || !lastId) break;
         }
     }
 
-    // 2) نطبّقها كلّها من الأقدم للأحدث — مهما كان الروم
-    collected.sort((a, b) => a.m.createdTimestamp - b.m.createdTimestamp);
-    let applied = 0;
-    for (const c of collected) {
-        try { c.fn(c.m, true); applied++; } catch (e) { console.warn('sanction parse:', e.message); }
+    // من الأقدم للأحدث — مهما كان الروم
+    collected.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const stats = { strike: 0, points: 0, promotion: 0, unknown: 0 };
+    for (const m of collected) {
+        try {
+            const t = parseTemplate(m);
+            t.channelName = m.channel.name || '';
+            const type = detectSanctionType(t);
+            if (type === 'strike') { handleStrikeMessage(m, t); stats.strike++; }
+            else if (type === 'points') { handlePointsMessage(m, t); stats.points++; }
+            else {
+                const r = await handlePromotionMessage(m);
+                if (r === 'unknown') stats.unknown++; else stats.promotion++;
+            }
+        } catch (e) { console.warn('sanction parse:', e.message); }
     }
-    console.log(`[الجزاءات] ${collected.length} رسالة روم (${applied} معالَجة) — روم الخصم والنقاط والترقيات`);
+    console.log(`[الجزاءات] ${collected.length} رسالة → سترايك ${stats.strike} • نقاط ${stats.points} • ترقية ${stats.promotion} • غير محدد ${stats.unknown}`);
     saveDb();
+    return stats;
 }
 
 /* ---------------------------- حالة البوت ---------------------------- */
@@ -1239,6 +1255,57 @@ async function syncJoinDates(guild) {
         }
     }
     saveDb();
+}
+
+/* ================= روم الجزاء: نقرأ النوع من المحتوى مو من رقم الروم ================= */
+
+const SANCTION_RE = /strike|strikes|deduct|punish|خصم|عقوبة|تأديب|غرامة|penalt/i;
+const POINTS_RE = /^point$|^points$|نقاط|nadda|score|points?$/i;
+
+/** يحدّد نوع الرسالة من أسماء الحقول — أضمن من الاعتماد على رقم الروم */
+function detectSanctionType(t) {
+    const keys = t.fields.map(f => f.key);
+    const has = re => keys.some(k => re.test(k));
+
+    if (has(SANCTION_RE)) return 'strike';
+    if (has(POINTS_RE)) return 'points';
+    // احتياط: لو اسم الروم فيه الكلمة
+    const ch = normKey(t.channelName || '');
+    if (/strike|خصم/.test(ch)) return 'strike';
+    if (/point|نقاط/.test(ch)) return 'points';
+    return null;
+}
+
+/** يعالج أي رسالة جزاء — النوع من المحتوى، مو من رقم الروم */
+async function handleSanctionMessage(msg) {
+    if (msg.author.bot) return;
+    const t = parseTemplate(msg);
+    t.channelName = msg.channel.name || '';
+
+    const type = detectSanctionType(t);
+    if (type === 'strike') return handleStrikeMessage(msg, t);
+    if (type === 'points') return handlePointsMessage(msg, t);
+
+    // القالب فاضي (زي روم الترقيات) → نجرب ترقية
+    const pr = await handlePromotionMessage(msg);
+    if (pr === 'unknown') return { unknown: true };
+
+    // ما قدرنا نحدد — نسجّلها عند الفرد بدال ما نخسرها
+    const targetId = resolveTarget(t, msg);
+    if (!targetId) return;
+    const st = officerStore(targetId);
+    if (!Array.isArray(st.unknownLogs)) st.unknownLogs = [];
+    if (st.unknownLogs.some(x => x.msgId === msg.id)) return;
+    st.unknownLogs.unshift({
+        msgId: msg.id,
+        at: msg.createdTimestamp,
+        channel: t.channelName || msg.channel.id,
+        body: t.raw.slice(0, 600),
+        fields: t.fields.map(f => `${f.label}: ${f.value}`)
+    });
+    if (st.unknownLogs.length > 60) st.unknownLogs.length = 60;
+    saveDb();
+    return { unknown: true };
 }
 
 /** يسجّل أي رسالة بروم التقارير — حتى بدون منشن (تنحفظ بسجل عام) */
@@ -2448,6 +2515,39 @@ app.post('/api/officers/:id/promotions/:msgId', requireAuth, requireEdit, (req, 
     res.json({ ok: true, promotion: p });
 });
 
+/** يعيد قراءة روم الجزاء من الصفر — يمسح السجل القديم ويبنيه من جديد */
+app.post('/api/rescan-sanctions', requireAuth, requireEdit, async (req, res) => {
+    if (!client.isReady() || !guildRef) return res.status(503).json({ error: 'bot-offline' });
+
+    // نسخ احتياطية قبل المسح
+    const backup = {};
+    for (const [id, st] of Object.entries(db.officers)) {
+        if ((st.pointsLog || []).length || (st.promotions || []).length) {
+            backup[id] = { pointsLog: st.pointsLog, promotions: st.promotions, points: st.points, strikeCount: st.strikeCount };
+        }
+    }
+
+    for (const st of Object.values(db.officers)) {
+        st.pointsLog = [];
+        st.promotions = [];
+        st.points = 0;
+        st.strikeCount = 0;
+        st.lastStrikeAt = null;
+        st.history = (st.history || []).filter(h => h.type !== 'strike' && h.type !== 'points' && h.type !== 'promote');
+    }
+
+    const stats = await syncSanctions();
+    await refreshRegistry(true);
+    io.emit('officers:update', { officers: lightOfficers(), meta: db.meta });
+
+    addLog('إعادة قراءة روم الجزاء', {
+        by: req.account.charName || req.account.username, byCopyId: req.account.copyId,
+        target: `${Object.keys(backup).length} فرد`,
+        details: `سترايك ${stats.strike} • نقاط ${stats.points} • ترقية ${stats.promotion} • غير محدد ${stats.unknown}`
+    });
+    res.json({ ok: true, ...stats });
+});
+
 /* --- التقارير: عرض وحذف --- */
 
 /** كل التقارير المسجّلة (منسوبة + عامة) */
@@ -2825,15 +2925,9 @@ client.on('messageCreate', async (message) => {
         refreshRegistry(true);
     }
 
-    // ============ رومات الخصم / النقاط / الترقيات ============
-    if (CONFIG.strikeChannels.includes(message.channel.id)) {
-        try { handleStrikeMessage(message); } catch (e) { console.warn('strike:', e.message); }
-    }
-    if (CONFIG.pointsChannels.includes(message.channel.id)) {
-        try { handlePointsMessage(message); } catch (e) { console.warn('points:', e.message); }
-    }
-    if (CONFIG.promotionChannels.includes(message.channel.id)) {
-        try { handlePromotionMessage(message); } catch (e) { console.warn('promotion:', e.message); }
+    // ============ رومات الجزاء: البوت يقرأ النوع من المحتوى ============
+    if (sanctionChannelIds().includes(message.channel.id)) {
+        try { await handleSanctionMessage(message); } catch (e) { console.warn('sanction:', e.message); }
     }
 });
 

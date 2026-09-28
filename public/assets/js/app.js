@@ -1495,6 +1495,7 @@ window.openEdit = async function (id) {
     $('edNotes').value = o.notes || '';
     $('edMsg').innerHTML = '';
     $('edRecalc').style.display = canEdit() ? '' : 'none';
+    $('edRescan').style.display = canEdit() ? '' : 'none';
     $('edLog').innerHTML = '<div class="empty" style="padding:18px"><span class="load"></span></div>';
 
     const rsel = $('edRankRole');
@@ -1573,6 +1574,21 @@ $('edRecalc').addEventListener('click', async () => {
         if (S.isAdmin) loadLogs();
     } catch (e) { toast(e.message, 'err'); }
     finally { b.disabled = false; b.innerHTML = '<i class="fa-solid fa-rotate"></i> إعادة الحساب من السجل'; }
+});
+
+$('edRescan').addEventListener('click', async () => {
+    if (!confirm('يعيد قراءة روم السترايك والنقاط والترقيات من الصفر.\n\nسجل النقاط والسترايك والترقيات كلها بتتمسح وتتبني من رسايل الديسكورد. يكمل؟')) return;
+    const b = $('edRescan');
+    b.disabled = true; b.innerHTML = '<span class="load"></span> جاري القراءة…';
+    try {
+        const r = await api('/api/rescan-sanctions', { method: 'POST' });
+        toast(`تمت — سترايك ${arabicNum(r.strike)} • نقاط ${arabicNum(r.points)} • ترقية ${arabicNum(r.promotion)}${r.unknown ? ` • غير محدد ${arabicNum(r.unknown)}` : ''}`, 'ok', 6000);
+        closeOv('ovEdit');
+        const fresh = await api('/api/officers');
+        S.officers = fresh.officers || [];
+        renderAll();
+    } catch (e) { toast(e.message, 'err', 6000); }
+    finally { b.disabled = false; b.innerHTML = '<i class="fa-solid fa-satellite-dish"></i> إعادة قراءة روم الجزاء'; }
 });
 
 $('edSave').addEventListener('click', async () => {
