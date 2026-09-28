@@ -878,9 +878,14 @@ function handleStrikeMessage(msg, pre) {
     if ((st.pointsLog || []).some(x => x.msgId === msg.id)) return;   // مطبّق مسبقاً
 
     // الرقم من حقل "strike" حصراً — ما نقرا أي رقم ثاني (لحتى لو السبب فيه أرقام)
-    let amount = saneNumber(t.byKey(SANCTION_RE));
-    if (amount === null || amount <= 0) amount = 1;
+    const rawStrike = t.byKey(SANCTION_RE);
+    let amount = saneNumber(rawStrike);
+    if (amount === null) {
+        // القالب فاضي (ما كتبوا الرقم) — ما نخترع خصم 1
+        return 'empty';
+    }
     amount = Math.min(Math.abs(amount), 100000);
+    if (amount === 0) return 'empty';
 
     const reason = t.byKey(/reason|desc|description|سبب|وصف/) || '(ما ذكر سبب)';
     const byId = t.firstId(/commend|coommend|by|issued|signed|amir|بامر/);
@@ -897,7 +902,9 @@ function handleStrikeMessage(msg, pre) {
     if (res) {
         addLog('خصم نقاط (Strike)', { by, byCopyId: byId, target: targetId, details: `-${res.applied} • ${reason}` });
         refreshRegistry(true);
+        return 'applied';
     }
+    return 'dupe';
 }
 
 function handlePointsMessage(msg, pre) {
@@ -931,28 +938,31 @@ function handlePointsMessage(msg, pre) {
     if (res) {
         addLog(amount >= 0 ? 'إضافة نقاط' : 'خصم نقاط', { by, byCopyId: byId, target: targetId, details: `${res.applied >= 0 ? '+' : ''}${res.applied} • ${reason}` });
         refreshRegistry(true);
+        return 'applied';
     }
+    return 'dupe';
 }
 
-async function handlePromotionMessage(msg) {
-    if (msg.author.bot) return;
-    const t = parseTemplate(msg);
-    t.channelName = msg.channel.name || '';
+/** هل القالب فيه حقول ترقية (من / إلى)؟ */
+function looksLikePromotion(t) {
+    return !!(t.byKey(/^from$/) || t.byKey(/^to$/));
+}
 
-    // القالب فاضي (ما كتبوا من/إلى) = ما نقدر نخمّن
-    const hasFrom = !!t.byKey(/^from$/);
-    const hasTo = !!t.byKey(/^to$/);
-    if (!hasFrom && !hasTo) {
-        const r = handleSanctionMessage(msg);
-        return r?.unknown ? 'unknown' : 'skipped';
-    }
+async function handlePromotionMessage(msg, pre) {
+    if (msg.author.bot) return;
+    const t = pre || parseTemplate(msg);
+    if (!t.channelName) t.channelName = msg.channel.name || '';
+
+    // القالب فاضي (ما كتبوا من/إلى) = مو ترقية، نرجع بدون ما نكمّل
+    // مهم: ما ننادي handleSanctionMessage من هنا أبداً (كان يسبّب استدعاء دائري)
+    if (!looksLikePromotion(t)) return 'not-promo';
 
     const targetId = resolveTarget(t, msg);
-    if (!targetId) { console.warn('[promotion] ما لقيت الفرد بالرسالة', msg.id); return; }
+    if (!targetId) { console.warn('[promotion] ما لقيت الفرد بالرسالة', msg.id); return 'no-target'; }
 
     const st = officerStore(targetId);
     if (!Array.isArray(st.promotions)) st.promotions = [];
-    if (st.promotions.some(p => p.msgId === msg.id)) return;   // مطبّق مسبقاً
+    if (st.promotions.some(p => p.msgId === msg.id)) return 'dupe';   // مطبّق مسبقاً
 
     // نلتقط من/إلى — يقبل منشن رتبة <@&id> أو نص عادي
     const clean = (s) => String(s || '').replace(/\s*\|\s*/g, ' ').replace(/[*_`~>]/g, '').trim();
@@ -1040,6 +1050,7 @@ async function handlePromotionMessage(msg) {
     addLog('ترقية', { by, byCopyId: byId, target: targetId, details: `${fromRank || '—'} ← ${toRank || '—'}${reason ? ' • ' + reason : ''}` });
     saveDb();
     refreshRegistry(true);
+    return 'promo';
 }
 
 /** يشرح سبب فشل تغيير الرتبة بشكل مفهوم */
@@ -1092,21 +1103,18 @@ async function syncSanctions() {
 
     // من الأقدم للأحدث — مهما كان الروم
     collected.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-    const stats = { strike: 0, points: 0, promotion: 0, unknown: 0 };
+    const stats = { strike: 0, points: 0, promotion: 0, unknown: 0, empty: 0, error: 0, total: collected.length };
     for (const m of collected) {
-        try {
-            const t = parseTemplate(m);
-            t.channelName = m.channel.name || '';
-            const type = detectSanctionType(t);
-            if (type === 'strike') { handleStrikeMessage(m, t); stats.strike++; }
-            else if (type === 'points') { handlePointsMessage(m, t); stats.points++; }
-            else {
-                const r = await handlePromotionMessage(m);
-                if (r === 'unknown') stats.unknown++; else stats.promotion++;
-            }
-        } catch (e) { console.warn('sanction parse:', e.message); }
+        const r = await handleSanctionMessage(m);
+        if (!r) continue;
+        if (r.type === 'error') { stats.error++; continue; }
+        if (r.skipped) { stats.empty++; continue; }      // قالب فاضي — ما انطبق
+        if (r.applied) stats[r.type] = (stats[r.type] || 0) + 1;
     }
-    console.log(`[الجزاءات] ${collected.length} رسالة → سترايك ${stats.strike} • نقاط ${stats.points} • ترقية ${stats.promotion} • غير محدد ${stats.unknown}`);
+    console.log(`[الجزاءات] ${stats.total} رسالة → سترايك ${stats.strike} • نقاط ${stats.points} • ترقية ${stats.promotion}` +
+        (stats.unknown ? ` • غير محدد ${stats.unknown}` : '') +
+        (stats.empty ? ` • قوالب فاضية ${stats.empty}` : '') +
+        (stats.error ? ` • أخطاء ${stats.error}` : ''));
     saveDb();
     return stats;
 }
@@ -1276,36 +1284,59 @@ function detectSanctionType(t) {
     return null;
 }
 
-/** يعالج أي رسالة جزاء — النوع من المحتوى، مو من رقم الروم */
+/** نقطة الدخول الوحيدة لكل رسائل الجزاء.
+ *  تقرأ النوع من المحتوى، وما تستدعي حالها أبداً (حماية ضد الاستدعاء الدائري). */
 async function handleSanctionMessage(msg) {
     if (msg.author.bot) return;
+    if (msg.__pdHandled) return;                 // حارس: نفس الرسالة ما تتعامل مرتين
+    msg.__pdHandled = true;
+
     const t = parseTemplate(msg);
     t.channelName = msg.channel.name || '';
 
-    const type = detectSanctionType(t);
-    if (type === 'strike') return handleStrikeMessage(msg, t);
-    if (type === 'points') return handlePointsMessage(msg, t);
+    try {
+        // 1) ترقية؟ (عندها حقول From / To)
+        if (looksLikePromotion(t)) {
+            const r = await handlePromotionMessage(msg, t);
+            if (r === 'promo') return { type: 'promotion', applied: true };
+            if (r === 'dupe') return { type: 'promotion', applied: false };
+        }
 
-    // القالب فاضي (زي روم الترقيات) → نجرب ترقية
-    const pr = await handlePromotionMessage(msg);
-    if (pr === 'unknown') return { unknown: true };
+        // 2) سترايك ولا نقاط؟
+        const type = detectSanctionType(t);
+        if (type === 'strike') {
+            const r = handleStrikeMessage(msg, t);
+            return { type: 'strike', applied: r === 'applied', skipped: r === 'empty' };
+        }
+        if (type === 'points') {
+            const r = handlePointsMessage(msg, t);
+            return { type: 'points', applied: r === 'applied' };
+        }
 
-    // ما قدرنا نحدد — نسجّلها عند الفرد بدال ما نخسرها
-    const targetId = resolveTarget(t, msg);
-    if (!targetId) return;
-    const st = officerStore(targetId);
-    if (!Array.isArray(st.unknownLogs)) st.unknownLogs = [];
-    if (st.unknownLogs.some(x => x.msgId === msg.id)) return;
-    st.unknownLogs.unshift({
-        msgId: msg.id,
-        at: msg.createdTimestamp,
-        channel: t.channelName || msg.channel.id,
-        body: t.raw.slice(0, 600),
-        fields: t.fields.map(f => `${f.label}: ${f.value}`)
-    });
-    if (st.unknownLogs.length > 60) st.unknownLogs.length = 60;
-    saveDb();
-    return { unknown: true };
+        // 3) ما قدرنا نحدد — نسجّلها عند الفرد بدال ما نخسرها
+        const targetId = resolveTarget(t, msg);
+        if (targetId) {
+            const st = officerStore(targetId);
+            if (!Array.isArray(st.unknownLogs)) st.unknownLogs = [];
+            if (!st.unknownLogs.some(x => x.msgId === msg.id)) {
+                st.unknownLogs.unshift({
+                    msgId: msg.id,
+                    at: msg.createdTimestamp,
+                    channel: t.channelName || msg.channel.id,
+                    body: t.raw.slice(0, 600),
+                    fields: t.fields.map(f => `${f.label}: ${f.value}`)
+                });
+                if (st.unknownLogs.length > 60) st.unknownLogs.length = 60;
+                saveDb();
+            }
+        }
+        return { type: 'unknown', applied: false };
+    } catch (e) {
+        console.error('[sanction] خطأ:', e.message);
+        return { type: 'error', applied: false };
+    } finally {
+        setTimeout(() => { try { delete msg.__pdHandled; } catch { } }, 0);
+    }
 }
 
 /** يسجّل أي رسالة بروم التقارير — حتى بدون منشن (تنحفظ بسجل عام) */
